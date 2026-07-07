@@ -44,6 +44,7 @@ export function createEmptyContact(url = '', pageTitle = '') {
     created_at: timestamp,
     updated_at: timestamp,
     status: 'in_progress',
+    company_name_entered: '',
     captured_sections: [],
     merged_contact: {
       ...createEmptyMergedContact(),
@@ -194,11 +195,14 @@ export async function extractContactUrlFromPage(url, pageTitle = '') {
     if (existing) {
       session.contact_capture.current_contact_id = existing.contact_id;
       if (!existing.source_page_title && pageTitle) existing.source_page_title = pageTitle;
+      existing.company_name_entered = session.company_name_entered || existing.company_name_entered || '';
+      removeCompanyProfileDataFromContact(existing);
       existing.updated_at = getTimestamp();
       return session;
     }
 
     const contact = createEmptyContact(normalizedUrl, pageTitle);
+    contact.company_name_entered = session.company_name_entered || '';
     contact.contact_url = normalizedUrl;
     contact.merged_contact.contact_identity.linkedin_profile_url = normalizedUrl;
     contact.source_page_title = pageTitle || '';
@@ -235,6 +239,7 @@ export function createContactFromUrl(session, url, pageTitle = '') {
   }
 
   const contact = createEmptyContact(url, pageTitle);
+  contact.company_name_entered = normalized.company_name_entered || '';
   normalized.contact_capture.contacts.push(contact);
   normalized.contact_capture.current_contact_id = contact.contact_id;
   normalized.updated_at = getTimestamp();
@@ -268,6 +273,7 @@ export function ensureCurrentContact(session) {
   }
 
   const contact = createEmptyContact();
+  contact.company_name_entered = normalized.company_name_entered || '';
   normalized.contact_capture.contacts.push(contact);
   normalized.contact_capture.current_contact_id = contact.contact_id;
   normalized.updated_at = getTimestamp();
@@ -357,8 +363,24 @@ function normalizeContact(contact = {}) {
   normalized.status = contact.status || 'in_progress';
   normalized.captured_sections = Array.isArray(contact.captured_sections) ? contact.captured_sections : [];
   normalized.merged_contact = deepMerge(createEmptyMergedContact(), contact.merged_contact || {});
+  normalized.company_name_entered = typeof contact.company_name_entered === 'string' ? contact.company_name_entered : '';
+  removeCompanyProfileDataFromContact(normalized);
   normalized.validation_metadata = normalizeContactValidation(contact.validation_metadata);
   return normalized;
+}
+
+
+function removeCompanyProfileDataFromContact(contact) {
+  delete contact.company_extraction;
+  delete contact.merged_company;
+  delete contact.company_identity;
+  delete contact.company_context;
+  if (contact.merged_contact) {
+    delete contact.merged_contact.company_extraction;
+    delete contact.merged_contact.merged_company;
+    delete contact.merged_contact.company_identity;
+    delete contact.merged_contact.company_context;
+  }
 }
 
 function normalizeContactValidation(metadata = {}) {
@@ -407,9 +429,11 @@ function mergeCapturedSection(session, section, settings) {
   };
 
   if (section.type === SECTION_TYPES.CONTACT_URL) {
-    createContactFromUrl(nextSession, section.payload?.url || section.sourceUrl || '', section.payload?.title || '');
+    const contact = createContactFromUrl(nextSession, section.payload?.url || section.sourceUrl || '', section.payload?.title || '');
+    if (contact) contact.company_name_entered = nextSession.company_name_entered || '';
   } else if (section.type === SECTION_TYPES.CONTACT_INFO) {
-    ensureCurrentContactForSelectedInfo(nextSession);
+    const contact = ensureCurrentContactForSelectedInfo(nextSession);
+    if (contact) contact.company_name_entered = nextSession.company_name_entered || '';
   }
 
   const mergedSession = mergeSession(nextSession, section, companyName);
@@ -429,6 +453,7 @@ function ensureCurrentContactForSelectedInfo(session) {
   if (current) return current;
 
   const contact = createEmptyContact();
+  contact.company_name_entered = normalized.company_name_entered || '';
   contact.contact_url = '';
   contact.status = 'missing_contact_url';
   contact.merged_contact.contact_identity.linkedin_profile_url = '';
