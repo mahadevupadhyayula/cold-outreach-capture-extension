@@ -12,12 +12,14 @@ export function buildExtractionExport(session, extractionType, companyNameEntere
   };
 
   if (extractionType === 'contacts') {
+    const contacts = buildContactExports(session?.contact_capture?.contacts);
+
     return {
       ...baseExport,
-      contacts: session?.contact_capture?.contacts || [],
-      captured_sections: flattenContactSections(session),
-      validation_metadata: buildValidationMetadata(session?.validation_metadata, extractionType),
-      exported_at: new Date().toISOString()
+      exported_at: new Date().toISOString(),
+      contacts_count: contacts.length,
+      contacts,
+      validation_metadata: buildValidationMetadata(session?.validation_metadata, extractionType)
     };
   }
 
@@ -63,6 +65,16 @@ function buildValidationMetadata(metadata = {}, extractionType) {
   };
 }
 
-function flattenContactSections(session) {
-  return (session?.contact_capture?.contacts || []).flatMap((contact) => contact.captured_sections || []);
+function buildContactExports(contacts = []) {
+  if (!Array.isArray(contacts)) return [];
+
+  return contacts.map((contact = {}) => ({
+    contact_id: contact.contact_id || '',
+    contact_url: contact.contact_url || contact.merged_contact?.contact_identity?.linkedin_profile_url || '',
+    source_page_title: contact.source_page_title || '',
+    status: contact.status || '',
+    merged_contact: contact.merged_contact || {},
+    captured_sections: Array.isArray(contact.captured_sections) ? contact.captured_sections : [],
+    validation_metadata: contact.validation_metadata || {}
+  }));
 }
