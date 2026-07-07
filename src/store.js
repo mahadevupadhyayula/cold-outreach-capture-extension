@@ -191,60 +191,25 @@ function mergeCapturedSection(session, section, settings) {
   const normalizedSession = normalizeSession(session);
   const companyName = (settings.company_name_entered || settings.companyName || '').trim();
   const activeMode = settings.active_mode || settings.mode || normalizedSession.active_mode || MODES.CONTACT;
-  const timestamp = getTimestamp();
   const nextSession = {
     ...normalizedSession,
     company_name_entered: companyName || normalizedSession.company_name_entered || '',
-    active_mode: activeMode,
-    updated_at: timestamp
+    active_mode: activeMode
   };
 
-  if (section.type === SECTION_TYPES.CONTACT_INFO || section.type === SECTION_TYPES.CONTACT_URL) {
-    nextSession.contact_extraction = {
-      ...nextSession.contact_extraction,
-      captured_sections: [...nextSession.contact_extraction.captured_sections, section]
-    };
-    if (section.type === SECTION_TYPES.CONTACT_URL) {
-      nextSession.contact_extraction.contact_url = section.payload?.url || section.sourceUrl || '';
-      nextSession.contact_extraction.source_page_title = section.payload?.title || '';
-    }
-  } else if (section.type === SECTION_TYPES.COMPANY_INFO || section.type === SECTION_TYPES.COMPANY_URL) {
-    nextSession.company_extraction = {
-      ...nextSession.company_extraction,
-      captured_sections: [...nextSession.company_extraction.captured_sections, section]
-    };
-    if (section.type === SECTION_TYPES.COMPANY_URL) {
-      nextSession.company_extraction.company_url = section.payload?.url || section.sourceUrl || '';
-      nextSession.company_extraction.source_page_title = section.payload?.title || '';
-    }
+  const mergedSession = mergeSession(nextSession, section, companyName);
+
+  if (section.type === SECTION_TYPES.CONTACT_URL) {
+    mergedSession.contact_extraction.contact_url = section.payload?.url || section.sourceUrl || '';
+    mergedSession.contact_extraction.source_page_title = section.payload?.title || '';
+  } else if (section.type === SECTION_TYPES.COMPANY_URL) {
+    mergedSession.company_extraction.company_url = section.payload?.url || section.sourceUrl || '';
+    mergedSession.company_extraction.source_page_title = section.payload?.title || '';
   }
 
-  return mergeLegacySessionShape(nextSession, section, companyName);
+  return mergedSession;
 }
 
-function mergeLegacySessionShape(session, section, companyName) {
-  const legacySession = mergeSession(
-    {
-      companyName: session.company_name_entered,
-      createdAt: session.created_at,
-      updatedAt: session.updated_at,
-      sections: [
-        ...session.contact_extraction.captured_sections,
-        ...session.company_extraction.captured_sections
-      ].filter((capturedSection) => capturedSection !== section)
-    },
-    section,
-    companyName
-  );
-
-  return {
-    ...session,
-    companyName: legacySession.companyName,
-    createdAt: legacySession.createdAt,
-    updatedAt: legacySession.updatedAt,
-    sections: legacySession.sections
-  };
-}
 
 function deepMerge(defaultValue, overrideValue) {
   if (Array.isArray(defaultValue)) {
