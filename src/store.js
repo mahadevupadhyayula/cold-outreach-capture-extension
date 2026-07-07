@@ -55,6 +55,7 @@ export function createEmptyContact(url = '', pageTitle = '') {
     validation_metadata: {
       missing_fields: [],
       field_conflicts: [],
+      validation_warnings: [],
       needs_manual_validation: true
     }
   };
@@ -320,6 +321,7 @@ function migrateSession(session) {
     contact.validation_metadata = {
       missing_fields: filterLegacyMissingFields(session.validation_metadata?.missing_fields || []),
       field_conflicts: Array.isArray(session.validation_metadata?.field_conflicts) ? session.validation_metadata.field_conflicts : [],
+      validation_warnings: Array.isArray(session.validation_metadata?.validation_warnings) ? session.validation_metadata.validation_warnings : [],
       needs_manual_validation: session.validation_metadata?.needs_manual_validation !== false
     };
 
@@ -363,6 +365,7 @@ function normalizeContactValidation(metadata = {}) {
   return {
     missing_fields: Array.isArray(metadata.missing_fields) ? metadata.missing_fields : [],
     field_conflicts: Array.isArray(metadata.field_conflicts) ? metadata.field_conflicts : [],
+    validation_warnings: Array.isArray(metadata.validation_warnings) ? metadata.validation_warnings : [],
     needs_manual_validation: metadata.needs_manual_validation !== false
   };
 }
@@ -406,12 +409,7 @@ function mergeCapturedSection(session, section, settings) {
   if (section.type === SECTION_TYPES.CONTACT_URL) {
     createContactFromUrl(nextSession, section.payload?.url || section.sourceUrl || '', section.payload?.title || '');
   } else if (section.type === SECTION_TYPES.CONTACT_INFO) {
-    const matchingContact = findContactByUrl(nextSession, section.payload?.source_url || section.sourceUrl || '');
-    if (matchingContact) {
-      nextSession.contact_capture.current_contact_id = matchingContact.contact_id;
-    } else {
-      ensureCurrentContact(nextSession);
-    }
+    ensureCurrentContactForSelectedInfo(nextSession);
   }
 
   const mergedSession = mergeSession(nextSession, section, companyName);
@@ -422,6 +420,42 @@ function mergeCapturedSection(session, section, settings) {
   }
 
   return mergedSession;
+}
+
+
+function ensureCurrentContactForSelectedInfo(session) {
+  const normalized = session?.contact_capture ? session : normalizeSession(session);
+  const current = getCurrentContact(normalized);
+  if (current) return current;
+
+  const contact = createEmptyContact();
+  contact.contact_url = '';
+  contact.status = 'missing_contact_url';
+  contact.merged_contact.contact_identity.linkedin_profile_url = '';
+  contact.validation_metadata = normalizeContactValidation(contact.validation_metadata);
+  addContactValidationWarning(contact, 'Contact URL missing. Use Extract contact URL on the contact profile.');
+  normalized.contact_capture.contacts.push(contact);
+  normalized.contact_capture.current_contact_id = contact.contact_id;
+  normalized.updated_at = getTimestamp();
+  return contact;
+}
+
+function addContactValidationWarning(contact, message) {
+  contact.validation_metadata = normalizeContactValidation(contact.validation_metadata);
+  const warning = {
+    type: 'validation_warning',
+    field: 'contact_url',
+    message,
+    captured_at: getTimestamp()
+  };
+
+  const exists = contact.validation_metadata.validation_warnings.some((item) => (
+    item?.type === warning.type
+      && item?.field === warning.field
+      && item?.message === warning.message
+  ));
+
+  if (!exists) contact.validation_metadata.validation_warnings.push(warning);
 }
 
 function normalizeUrl(url) {

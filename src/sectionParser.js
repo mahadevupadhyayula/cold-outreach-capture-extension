@@ -38,11 +38,12 @@ function parseLegacySection(input, extractionType, sectionType) {
     return { ...base, payload: parseCompanyUrl(url || sourceUrl, title) };
   }
 
+  const splitSection = splitSectionTitleAndBody(text);
   const sectionInput = {
     extraction_type: extractionType,
     section_type: sectionType,
-    section_title_raw: splitSectionTitleAndBody(text).section_title_raw,
-    section_text: text || '',
+    section_title_raw: splitSection.section_title_raw,
+    section_text: splitSection.section_text,
     page_url: sourceUrl || url || '',
     page_title: title || ''
   };
