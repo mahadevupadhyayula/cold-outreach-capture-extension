@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cold Outreach Capture</title>
+    <link rel="stylesheet" href="./popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header>
+        <p class="eyebrow">Cold Outreach OS</p>
+        <h1>Cold Outreach Capture</h1>
+        <p class="lede">Manual, local-only evidence capture.</p>
+      </header>
+
+      <form id="settings-form" class="card">
+        <label for="company-name">Company name</label>
+        <input id="company-name" name="companyName" type="text" placeholder="Example: Acme Inc." autocomplete="organization">
+
+        <fieldset>
+          <legend>Extraction mode</legend>
+          <label class="radio-row"><input type="radio" name="mode" value="contact"> Contact</label>
+          <label class="radio-row"><input type="radio" name="mode" value="company"> Company</label>
+        </fieldset>
+
+        <button type="submit">Save session details</button>
+      </form>
+
+      <section class="card stats" aria-live="polite">
+        <span>Captured sections</span>
+        <strong id="section-count">0</strong>
+      </section>
+
+      <section class="actions">
+        <button id="download-session" type="button">Download JSON .txt</button>
+        <button id="reset-session" type="button" class="secondary">Reset session</button>
+      </section>
+
+      <p id="status" role="status"></p>
+    </main>
+    <script type="module" src="./popup.js"></script>
+  </body>
+</html>
