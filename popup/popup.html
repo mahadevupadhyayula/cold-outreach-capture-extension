@@ -57,10 +57,24 @@
             <dd id="previewCompanySections">0</dd>
           </div>
           <div>
-            <dt>Last captured section</dt>
-            <dd id="previewLastSection">—</dd>
+            <dt>Missing contact fields</dt>
+            <dd id="previewMissingContactFields">None</dd>
+          </div>
+          <div>
+            <dt>Missing company fields</dt>
+            <dd id="previewMissingCompanyFields">None</dd>
+          </div>
+          <div>
+            <dt>Field conflicts</dt>
+            <dd id="previewFieldConflicts">0</dd>
           </div>
         </dl>
+        <ul id="previewWarnings" class="warnings" aria-label="Validation warnings" hidden></ul>
+      </section>
+
+      <section class="card" aria-labelledby="recentSectionsTitle">
+        <h2 id="recentSectionsTitle">Last 5 captured sections</h2>
+        <ol id="previewRecentSections" class="recent-sections"></ol>
       </section>
 
       <section class="actions" aria-label="Session actions">
