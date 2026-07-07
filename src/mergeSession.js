@@ -163,7 +163,9 @@ function recalculateValidation(session) {
   for (const contact of session.contact_capture?.contacts || []) {
     contact.validation_metadata = normalizeContactValidationMetadata(contact.validation_metadata);
     contact.validation_metadata.missing_fields = calculateContactMissingFields(contact);
-    contact.validation_metadata.needs_manual_validation = contact.validation_metadata.missing_fields.length > 0 || contact.validation_metadata.field_conflicts.length > 0;
+    contact.validation_metadata.needs_manual_validation = contact.validation_metadata.missing_fields.length > 0
+      || contact.validation_metadata.field_conflicts.length > 0
+      || contact.validation_metadata.validation_warnings.length > 0;
   }
 
   const companyMissingFields = calculateCompanyMissingFields(session);
@@ -254,6 +256,7 @@ function normalizeContactValidationMetadata(metadata = {}) {
   return {
     missing_fields: Array.isArray(metadata.missing_fields) ? metadata.missing_fields : [],
     field_conflicts: Array.isArray(metadata.field_conflicts) ? metadata.field_conflicts : [],
+    validation_warnings: Array.isArray(metadata.validation_warnings) ? metadata.validation_warnings : [],
     needs_manual_validation: metadata.needs_manual_validation !== false
   };
 }
