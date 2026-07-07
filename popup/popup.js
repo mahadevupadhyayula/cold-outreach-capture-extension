@@ -220,6 +220,9 @@ function buildSessionSummary(settings, session) {
     companyUrl: session.company_extraction?.company_url || readSectionUrl(findLastSection(sections, SECTION_TYPES.COMPANY_URL)),
     companySections,
     missingCompanyFields: filterMissingFields(missingFields, 'merged_company.'),
+    contactsMissingUrlCount: contacts.filter((contact) => getMissingFields(contact).includes('contact_url') || !getContactUrl(contact)).length,
+    contactsMissingNameCount: contacts.filter((contact) => getMissingFields(contact).includes('contact_identity.full_name') || !getContactName(contact)).length,
+    contactsWithConflictsCount: contacts.filter((contact) => (contact.validation_metadata?.field_conflicts || []).length > 0).length,
     fieldConflictsCount: getConflictCount(session),
     sections
   };
@@ -247,12 +250,18 @@ function renderContactList(contacts, currentContactId) {
   contacts.forEach((contact, index) => {
     const item = document.createElement('li');
     if (contact.contact_id === currentContactId) item.classList.add('active-contact');
+    const missingFields = getMissingFields(contact);
+    const conflictCount = contact.validation_metadata?.field_conflicts?.length || 0;
+    const reviewLabel = contact.validation_metadata?.needs_manual_validation
+      ? `Manual review: ${missingFields.length} missing${conflictCount ? `, ${conflictCount} conflict${conflictCount === 1 ? '' : 's'}` : ''}`
+      : 'Complete';
     item.innerHTML = `
       <strong>${escapeHtml(getContactName(contact) || 'Unnamed contact')}${contact.contact_id === currentContactId ? ' · Active' : ''}</strong>
       <span>${escapeHtml(getContactUrl(contact) || 'No contact URL')}</span>
       <p class="contact-meta">
         <span>${(contact.captured_sections || []).length} sections</span>
         <span>${escapeHtml(formatStatus(contact.status || 'unknown'))}</span>
+        <span>${escapeHtml(reviewLabel)}</span>
         <span>#${index + 1}</span>
       </p>
     `;
@@ -268,6 +277,10 @@ function getContactUrl(contact) {
   return contact?.contact_url || contact?.merged_contact?.contact_identity?.linkedin_profile_url || '';
 }
 
+function getMissingFields(contact) {
+  return Array.isArray(contact?.validation_metadata?.missing_fields) ? contact.validation_metadata.missing_fields : [];
+}
+
 function getConflictCount(session) {
   const contactConflicts = getContacts(session).reduce((count, contact) => count + (contact.validation_metadata?.field_conflicts?.length || 0), 0);
   return contactConflicts + (session.validation_metadata?.session_conflicts?.length || 0);
@@ -277,6 +290,9 @@ function buildWarnings(summary, extractionType = null) {
   const warnings = [];
   if (!summary.companyName) warnings.push('Company name is required before downloading.');
   if ((!extractionType || extractionType === 'contacts') && summary.contacts.length === 0) warnings.push('Contact download has no contacts.');
+  if ((!extractionType || extractionType === 'contacts') && summary.contactsMissingUrlCount > 0) warnings.push(`${summary.contactsMissingUrlCount} contact${summary.contactsMissingUrlCount === 1 ? '' : 's'} missing URL.`);
+  if ((!extractionType || extractionType === 'contacts') && summary.contactsMissingNameCount > 0) warnings.push(`${summary.contactsMissingNameCount} contact${summary.contactsMissingNameCount === 1 ? '' : 's'} missing name.`);
+  if ((!extractionType || extractionType === 'contacts') && summary.contactsWithConflictsCount > 0) warnings.push(`${summary.contactsWithConflictsCount} contact${summary.contactsWithConflictsCount === 1 ? '' : 's'} with field conflicts.`);
   if ((!extractionType || extractionType === 'company') && summary.companySections.length === 0) warnings.push('Company download has zero company sections.');
   return warnings;
 }
