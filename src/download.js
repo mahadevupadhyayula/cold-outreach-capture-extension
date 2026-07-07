@@ -14,8 +14,8 @@ export function buildExtractionExport(session, extractionType, companyNameEntere
   if (extractionType === 'contacts') {
     return {
       ...baseExport,
-      merged_contact: session?.contact_extraction?.merged_contact || null,
-      captured_sections: session?.contact_extraction?.captured_sections || [],
+      contacts: session?.contact_capture?.contacts || [],
+      captured_sections: flattenContactSections(session),
       validation_metadata: buildValidationMetadata(session?.validation_metadata, extractionType),
       exported_at: new Date().toISOString()
     };
@@ -50,14 +50,19 @@ export function buildExtractionFilename(companyNameEntered, extractionType) {
 }
 
 function buildValidationMetadata(metadata = {}, extractionType) {
-  const missingPrefix = extractionType === 'contacts' ? 'merged_contact.' : 'merged_company.';
-  const missingFields = Array.isArray(metadata?.missing_fields)
-    ? metadata.missing_fields.filter((field) => String(field).startsWith(missingPrefix))
-    : [];
+  if (extractionType === 'contacts') {
+    return {
+      needs_manual_validation: metadata?.needs_manual_validation !== false,
+      session_conflicts: Array.isArray(metadata?.session_conflicts) ? metadata.session_conflicts : []
+    };
+  }
 
   return {
-    missing_fields: missingFields,
-    field_conflicts: Array.isArray(metadata?.field_conflicts) ? metadata.field_conflicts : [],
-    needs_manual_validation: metadata?.needs_manual_validation !== false
+    needs_manual_validation: metadata?.needs_manual_validation !== false,
+    session_conflicts: Array.isArray(metadata?.session_conflicts) ? metadata.session_conflicts : []
   };
+}
+
+function flattenContactSections(session) {
+  return (session?.contact_capture?.contacts || []).flatMap((contact) => contact.captured_sections || []);
 }

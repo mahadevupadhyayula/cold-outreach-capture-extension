@@ -5,6 +5,61 @@ export function getTimestamp() {
   return new Date().toISOString();
 }
 
+export function createEmptyMergedContact() {
+  return {
+    contact_identity: {
+      full_name: '',
+      linkedin_profile_url: '',
+      linkedin_headline: '',
+      current_job_title: '',
+      current_company_name: '',
+      location_region: '',
+      seniority_level: ''
+    },
+    profile_content: {
+      about_text: '',
+      current_experience: [],
+      previous_experience: [],
+      education: [],
+      featured_items: [],
+      recent_activity: []
+    },
+    outreach_inputs: {
+      personalization_hook_candidates: [],
+      ai_product_keywords: [],
+      role_keywords: [],
+      possible_dm_angles: []
+    }
+  };
+}
+
+export function createEmptyContact(url = '', pageTitle = '') {
+  const timestamp = getTimestamp();
+  const contactUrl = normalizeUrl(url);
+
+  return {
+    contact_id: crypto.randomUUID(),
+    contact_url: contactUrl,
+    source_page_title: pageTitle || '',
+    created_at: timestamp,
+    updated_at: timestamp,
+    status: 'in_progress',
+    captured_sections: [],
+    merged_contact: {
+      ...createEmptyMergedContact(),
+      contact_identity: {
+        ...createEmptyMergedContact().contact_identity,
+        linkedin_profile_url: contactUrl
+      }
+    },
+    validation_metadata: {
+      missing_fields: [],
+      field_conflicts: [],
+      needs_manual_validation: true
+    }
+  };
+}
+
 export function createEmptySession(companyName = '') {
   const timestamp = getTimestamp();
 
@@ -14,35 +69,9 @@ export function createEmptySession(companyName = '') {
     updated_at: timestamp,
     company_name_entered: companyName.trim(),
     active_mode: MODES.CONTACT,
-    contact_extraction: {
-      contact_url: '',
-      source_page_title: '',
-      captured_sections: [],
-      merged_contact: {
-        contact_identity: {
-          full_name: '',
-          linkedin_profile_url: '',
-          linkedin_headline: '',
-          current_job_title: '',
-          current_company_name: '',
-          location_region: '',
-          seniority_level: ''
-        },
-        profile_content: {
-          about_text: '',
-          current_experience: [],
-          previous_experience: [],
-          education: [],
-          featured_items: [],
-          recent_activity: []
-        },
-        outreach_inputs: {
-          personalization_hook_candidates: [],
-          ai_product_keywords: [],
-          role_keywords: [],
-          possible_dm_angles: []
-        }
-      }
+    contact_capture: {
+      current_contact_id: '',
+      contacts: []
     },
     company_extraction: {
       company_url: '',
@@ -69,9 +98,8 @@ export function createEmptySession(companyName = '') {
       }
     },
     validation_metadata: {
-      missing_fields: [],
-      field_conflicts: [],
-      needs_manual_validation: true
+      needs_manual_validation: true,
+      session_conflicts: []
     }
   };
 }
@@ -160,11 +188,67 @@ export async function getLastSelection() {
   return result[STORAGE_KEYS.LAST_SELECTION] || { text: '', pageUrl: '' };
 }
 
-function normalizeSession(session) {
-  const normalized = deepMerge(
-    createEmptySession(session?.company_name_entered || session?.companyName || ''),
-    session || {}
-  );
+export function getCurrentContact(session) {
+  const normalized = normalizeSession(session);
+  const contacts = normalized.contact_capture.contacts;
+  return contacts.find((contact) => contact.contact_id === normalized.contact_capture.current_contact_id) || null;
+}
+
+export function createContactFromUrl(session, url, pageTitle = '') {
+  const normalized = session?.contact_capture ? session : normalizeSession(session);
+  const existing = findContactByUrl(normalized, url);
+  if (existing) {
+    normalized.contact_capture.current_contact_id = existing.contact_id;
+    return existing;
+  }
+
+  const contact = createEmptyContact(url, pageTitle);
+  normalized.contact_capture.contacts.push(contact);
+  normalized.contact_capture.current_contact_id = contact.contact_id;
+  normalized.updated_at = getTimestamp();
+  return contact;
+}
+
+export function findContactByUrl(session, url) {
+  const value = normalizeUrl(url);
+  if (!value) return null;
+  const normalized = session?.contact_capture ? session : normalizeSession(session);
+  return normalized.contact_capture.contacts.find((contact) => normalizeUrl(contact.contact_url || contact.merged_contact?.contact_identity?.linkedin_profile_url) === value) || null;
+}
+
+export function setCurrentContact(session, contactId) {
+  const normalized = session?.contact_capture ? session : normalizeSession(session);
+  const contact = normalized.contact_capture.contacts.find((item) => item.contact_id === contactId);
+  if (!contact) return null;
+  normalized.contact_capture.current_contact_id = contact.contact_id;
+  normalized.updated_at = getTimestamp();
+  return contact;
+}
+
+export function ensureCurrentContact(session) {
+  const normalized = session?.contact_capture ? session : normalizeSession(session);
+  const current = getCurrentContact(normalized);
+  if (current) return current;
+
+  if (normalized.contact_capture.contacts.length > 0) {
+    normalized.contact_capture.current_contact_id = normalized.contact_capture.contacts[0].contact_id;
+    return normalized.contact_capture.contacts[0];
+  }
+
+  const contact = createEmptyContact();
+  normalized.contact_capture.contacts.push(contact);
+  normalized.contact_capture.current_contact_id = contact.contact_id;
+  normalized.updated_at = getTimestamp();
+  return contact;
+}
+
+export function normalizeSession(session) {
+  const migrated = migrateSession(session);
+  const normalized = deepMerge(createEmptySession(migrated?.company_name_entered || migrated?.companyName || ''), migrated || {});
+
+  normalized.schema_version = SESSION_SCHEMA_VERSION;
+  normalized.contact_capture = normalizeContactCapture(normalized.contact_capture);
+  normalized.validation_metadata = normalizeSessionValidation(normalized.validation_metadata);
 
   if (!normalized.company_name_entered && normalized.companyName) {
     normalized.company_name_entered = normalized.companyName;
@@ -177,14 +261,105 @@ function normalizeSession(session) {
     normalized.company_extraction.company_url = companyUrlSection?.payload?.url || companyUrlSection?.sourceUrl || '';
   }
 
-  if (normalized.contact_extraction.contact_url === '' && Array.isArray(normalized.sections)) {
-    const contactUrlSection = [...normalized.sections]
-      .reverse()
-      .find((section) => section.type === SECTION_TYPES.CONTACT_URL);
-    normalized.contact_extraction.contact_url = contactUrlSection?.payload?.url || contactUrlSection?.sourceUrl || '';
+  return normalized;
+}
+
+function migrateSession(session) {
+  if (!session) return createEmptySession();
+  if (session.contact_capture?.contacts) return session;
+
+  const next = {
+    ...session,
+    schema_version: SESSION_SCHEMA_VERSION,
+    contact_capture: {
+      current_contact_id: '',
+      contacts: []
+    },
+    validation_metadata: migrateSessionValidation(session.validation_metadata)
+  };
+
+  const oldContactExtraction = session.contact_extraction;
+  if (oldContactExtraction) {
+    const contact = createEmptyContact(oldContactExtraction.contact_url || '', oldContactExtraction.source_page_title || '');
+    contact.captured_sections = Array.isArray(oldContactExtraction.captured_sections) ? oldContactExtraction.captured_sections : [];
+    contact.merged_contact = deepMerge(createEmptyMergedContact(), oldContactExtraction.merged_contact || {});
+    if (oldContactExtraction.contact_url && !contact.merged_contact.contact_identity.linkedin_profile_url) {
+      contact.merged_contact.contact_identity.linkedin_profile_url = oldContactExtraction.contact_url;
+    }
+    contact.validation_metadata = {
+      missing_fields: filterLegacyMissingFields(session.validation_metadata?.missing_fields || []),
+      field_conflicts: Array.isArray(session.validation_metadata?.field_conflicts) ? session.validation_metadata.field_conflicts : [],
+      needs_manual_validation: session.validation_metadata?.needs_manual_validation !== false
+    };
+
+    const hasContactData = contact.contact_url || contact.captured_sections.length > 0 || hasMergedContactData(contact.merged_contact);
+    if (hasContactData) {
+      next.contact_capture.contacts.push(contact);
+      next.contact_capture.current_contact_id = contact.contact_id;
+    }
   }
 
+  delete next.contact_extraction;
+  return next;
+}
+
+function normalizeContactCapture(contactCapture = {}) {
+  const contacts = Array.isArray(contactCapture.contacts) ? contactCapture.contacts.map(normalizeContact) : [];
+  const currentContactId = contacts.some((contact) => contact.contact_id === contactCapture.current_contact_id)
+    ? contactCapture.current_contact_id
+    : '';
+
+  return {
+    current_contact_id: currentContactId,
+    contacts
+  };
+}
+
+function normalizeContact(contact = {}) {
+  const timestamp = getTimestamp();
+  const normalized = deepMerge(createEmptyContact(contact.contact_url || contact.merged_contact?.contact_identity?.linkedin_profile_url || '', contact.source_page_title || ''), contact);
+  normalized.contact_id = contact.contact_id || normalized.contact_id;
+  normalized.created_at = contact.created_at || timestamp;
+  normalized.updated_at = contact.updated_at || timestamp;
+  normalized.status = contact.status || 'in_progress';
+  normalized.captured_sections = Array.isArray(contact.captured_sections) ? contact.captured_sections : [];
+  normalized.merged_contact = deepMerge(createEmptyMergedContact(), contact.merged_contact || {});
+  normalized.validation_metadata = normalizeContactValidation(contact.validation_metadata);
   return normalized;
+}
+
+function normalizeContactValidation(metadata = {}) {
+  return {
+    missing_fields: Array.isArray(metadata.missing_fields) ? metadata.missing_fields : [],
+    field_conflicts: Array.isArray(metadata.field_conflicts) ? metadata.field_conflicts : [],
+    needs_manual_validation: metadata.needs_manual_validation !== false
+  };
+}
+
+function normalizeSessionValidation(metadata = {}) {
+  return {
+    needs_manual_validation: metadata.needs_manual_validation !== false,
+    session_conflicts: Array.isArray(metadata.session_conflicts) ? metadata.session_conflicts : []
+  };
+}
+
+function migrateSessionValidation(metadata = {}) {
+  return {
+    needs_manual_validation: metadata?.needs_manual_validation !== false,
+    session_conflicts: Array.isArray(metadata?.session_conflicts) ? metadata.session_conflicts : []
+  };
+}
+
+function filterLegacyMissingFields(fields) {
+  return fields
+    .filter((field) => String(field).startsWith('merged_contact.'))
+    .map((field) => String(field).replace('merged_contact.', ''));
+}
+
+function hasMergedContactData(mergedContact) {
+  return Object.values(mergedContact.contact_identity || {}).some(Boolean)
+    || Object.values(mergedContact.profile_content || {}).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value))
+    || Object.values(mergedContact.outreach_inputs || {}).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value));
 }
 
 function mergeCapturedSection(session, section, settings) {
@@ -197,12 +372,20 @@ function mergeCapturedSection(session, section, settings) {
     active_mode: activeMode
   };
 
+  if (section.type === SECTION_TYPES.CONTACT_URL) {
+    createContactFromUrl(nextSession, section.payload?.url || section.sourceUrl || '', section.payload?.title || '');
+  } else if (section.type === SECTION_TYPES.CONTACT_INFO) {
+    const matchingContact = findContactByUrl(nextSession, section.payload?.source_url || section.sourceUrl || '');
+    if (matchingContact) {
+      nextSession.contact_capture.current_contact_id = matchingContact.contact_id;
+    } else {
+      ensureCurrentContact(nextSession);
+    }
+  }
+
   const mergedSession = mergeSession(nextSession, section, companyName);
 
-  if (section.type === SECTION_TYPES.CONTACT_URL) {
-    mergedSession.contact_extraction.contact_url = section.payload?.url || section.sourceUrl || '';
-    mergedSession.contact_extraction.source_page_title = section.payload?.title || '';
-  } else if (section.type === SECTION_TYPES.COMPANY_URL) {
+  if (section.type === SECTION_TYPES.COMPANY_URL) {
     mergedSession.company_extraction.company_url = section.payload?.url || section.sourceUrl || '';
     mergedSession.company_extraction.source_page_title = section.payload?.title || '';
   }
@@ -210,6 +393,9 @@ function mergeCapturedSection(session, section, settings) {
   return mergedSession;
 }
 
+function normalizeUrl(url) {
+  return String(url || '').trim().replace(/\/$/, '');
+}
 
 function deepMerge(defaultValue, overrideValue) {
   if (Array.isArray(defaultValue)) {
