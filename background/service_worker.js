@@ -1,5 +1,5 @@
 import { MENU_DEFINITIONS, MENU_ACTIONS, SECTION_TYPES } from '../src/constants.js';
-import { appendSection, getLastSelection } from '../src/store.js';
+import { appendSection } from '../src/store.js';
 import { parseSection } from '../src/sectionParser.js';
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -22,18 +22,29 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const type = sectionTypeForMenu(info.menuItemId);
   if (!type) return;
 
-  const selection = await getCurrentSelection(info, tab);
-  const targetUrl = info.linkUrl || info.pageUrl || tab?.url || selection.pageUrl || '';
-  const text = info.selectionText || selection.text || '';
+  const selection = await getCurrentSelection(tab);
+  const pageUrl = info.pageUrl || tab?.url || selection.pageUrl || '';
+  const pageTitle = selection.title || tab?.title || '';
 
-  const section = parseSection({
+  if (isUrlExtraction(type)) {
+    await appendSection(parseSection({
+      type,
+      url: pageUrl,
+      sourceUrl: pageUrl,
+      title: pageTitle
+    }));
+    return;
+  }
+
+  const text = selection.text || info.selectionText || '';
+  if (!text.trim()) return;
+
+  await appendSection(parseSection({
     type,
     text,
-    url: targetUrl,
-    sourceUrl: info.pageUrl || tab?.url || selection.pageUrl || ''
-  });
-
-  await appendSection(section);
+    sourceUrl: pageUrl,
+    title: pageTitle
+  }));
 });
 
 function sectionTypeForMenu(menuItemId) {
@@ -46,21 +57,43 @@ function sectionTypeForMenu(menuItemId) {
   return map[menuItemId] || '';
 }
 
-async function getCurrentSelection(info, tab) {
-  if (info.selectionText) {
-    return { text: info.selectionText, pageUrl: info.pageUrl || tab?.url || '' };
-  }
+function isUrlExtraction(type) {
+  return type === SECTION_TYPES.CONTACT_URL || type === SECTION_TYPES.COMPANY_URL;
+}
 
+async function getCurrentSelection(tab) {
   if (!tab?.id) {
-    return getLastSelection();
+    return { text: '', title: tab?.title || '', pageUrl: tab?.url || '' };
   }
 
   try {
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_SELECTION' });
-    if (response?.text) return response;
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_SELECTED_TEXT' });
+    if (response) return normalizeSelectionResponse(response, tab);
   } catch (_error) {
-    // Content scripts cannot run on Chrome internal pages. Fall back to the last local selection.
+    // The content script may be unavailable on this page or not injected yet.
   }
 
-  return getLastSelection();
+  try {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => ({
+        text: window.getSelection().toString(),
+        title: document.title,
+        pageUrl: window.location.href
+      })
+    });
+    return normalizeSelectionResponse(result?.result, tab);
+  } catch (_error) {
+    // Chrome internal pages and other restricted URLs cannot run injected scripts.
+  }
+
+  return { text: '', title: tab?.title || '', pageUrl: tab?.url || '' };
+}
+
+function normalizeSelectionResponse(response, tab) {
+  return {
+    text: response?.text || '',
+    title: response?.title || tab?.title || '',
+    pageUrl: response?.pageUrl || response?.url || tab?.url || ''
+  };
 }
