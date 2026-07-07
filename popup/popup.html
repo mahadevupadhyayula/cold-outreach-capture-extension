@@ -9,32 +9,64 @@
   <body>
     <main class="popup-shell">
       <header>
-        <p class="eyebrow">Cold Outreach OS</p>
         <h1>Cold Outreach Capture</h1>
-        <p class="lede">Manual, local-only evidence capture.</p>
+        <p>Control panel for the current local capture session.</p>
       </header>
 
-      <form id="settings-form" class="card">
-        <label for="company-name">Company name</label>
-        <input id="company-name" name="companyName" type="text" placeholder="Example: Acme Inc." autocomplete="organization">
+      <section class="card" aria-labelledby="settingsTitle">
+        <h2 id="settingsTitle">Session settings</h2>
+        <form id="settingsForm">
+          <label for="companyNameInput">Company Name</label>
+          <input id="companyNameInput" name="companyName" type="text" placeholder="Example: Acme Inc." autocomplete="organization">
 
-        <fieldset>
-          <legend>Extraction mode</legend>
-          <label class="radio-row"><input type="radio" name="mode" value="contact"> Contact</label>
-          <label class="radio-row"><input type="radio" name="mode" value="company"> Company</label>
-        </fieldset>
+          <label for="extractionMode">Extraction Mode</label>
+          <select id="extractionMode" name="extractionMode">
+            <option value="contact">Contact</option>
+            <option value="company">Company</option>
+          </select>
 
-        <button type="submit">Save session details</button>
-      </form>
-
-      <section class="card stats" aria-live="polite">
-        <span>Captured sections</span>
-        <strong id="section-count">0</strong>
+          <button id="saveSettingsButton" type="submit">Save Session Settings</button>
+        </form>
       </section>
 
-      <section class="actions">
-        <button id="download-session" type="button">Download JSON .txt</button>
-        <button id="reset-session" type="button" class="secondary">Reset session</button>
+      <section class="card" aria-labelledby="summaryTitle" aria-live="polite">
+        <h2 id="summaryTitle">Current session summary</h2>
+        <dl class="session-preview">
+          <div>
+            <dt>Company name</dt>
+            <dd id="previewCompanyName">—</dd>
+          </div>
+          <div>
+            <dt>Mode</dt>
+            <dd id="previewMode">Contact</dd>
+          </div>
+          <div>
+            <dt>Contact URL</dt>
+            <dd id="previewContactUrl">—</dd>
+          </div>
+          <div>
+            <dt>Company URL</dt>
+            <dd id="previewCompanyUrl">—</dd>
+          </div>
+          <div>
+            <dt>Captured contact sections</dt>
+            <dd id="previewContactSections">0</dd>
+          </div>
+          <div>
+            <dt>Captured company sections</dt>
+            <dd id="previewCompanySections">0</dd>
+          </div>
+          <div>
+            <dt>Last captured section</dt>
+            <dd id="previewLastSection">—</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="actions" aria-label="Session actions">
+        <button id="downloadContactsButton" type="button">Download Contacts</button>
+        <button id="downloadCompanyInfoButton" type="button">Download Company Info</button>
+        <button id="clearSessionButton" type="button" class="secondary">Clear Session</button>
       </section>
 
       <p id="status" role="status"></p>
