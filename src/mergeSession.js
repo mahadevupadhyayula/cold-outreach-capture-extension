@@ -99,7 +99,7 @@ function mergeContactSection(contactRecord, section) {
     mergeScalar(contact.profile_content, 'about_text', fields.about_text, contactRecord, section);
     mergeArrayFields(contact.outreach_inputs, fields, ['personalization_hook_candidates', 'ai_product_keywords', 'role_keywords', 'possible_dm_angles'], contactRecord, section);
   } else if (sectionType === 'experience') {
-    const targetKey = fields.is_current_role ? 'current_experience' : 'previous_experience';
+    const targetKey = isCurrentExperience(fields) ? 'current_experience' : 'previous_experience';
     mergeArray(contact.profile_content, targetKey, [stripRoutingFields(fields)]);
   } else if (sectionType === 'activity') {
     mergeArray(contact.profile_content, 'recent_activity', [activityItem(fields, section)]);
@@ -132,13 +132,14 @@ function mergeCompanySection(session, section) {
 
 function resolveContact(session, section) {
   const contacts = session.contact_capture.contacts;
-  if (section.type === SECTION_TYPES.CONTACT_URL) {
-    const url = section.payload?.url || section.sourceUrl || '';
-    const existing = findContactByUrlInList(contacts, url);
-    if (existing) {
-      session.contact_capture.current_contact_id = existing.contact_id;
-      return existing;
-    }
+  const sectionUrl = getContactUrlFromSection(section);
+  if (sectionUrl) {
+    const existing = findContactByUrlInList(contacts, sectionUrl);
+    if (existing) return setCurrentContact(session, existing);
+
+    const created = createContactRecord(sectionUrl, section);
+    contacts.push(created);
+    return setCurrentContact(session, created);
   }
 
   const current = contacts.find((contact) => contact.contact_id === session.contact_capture.current_contact_id);
@@ -149,8 +150,52 @@ function resolveContact(session, section) {
 function normalizeContactCapture(contactCapture = {}) {
   return {
     current_contact_id: contactCapture.current_contact_id || '',
-    contacts: Array.isArray(contactCapture.contacts) ? contactCapture.contacts : []
+    contacts: Array.isArray(contactCapture.contacts) ? contactCapture.contacts.map(normalizeContactRecord) : []
   };
+}
+
+function normalizeContactRecord(contact = {}) {
+  return {
+    ...contact,
+    captured_sections: Array.isArray(contact.captured_sections) ? contact.captured_sections : [],
+    merged_contact: {
+      contact_identity: {},
+      profile_content: {},
+      outreach_inputs: {},
+      ...(contact.merged_contact || {}),
+      contact_identity: contact.merged_contact?.contact_identity || {},
+      profile_content: contact.merged_contact?.profile_content || {},
+      outreach_inputs: contact.merged_contact?.outreach_inputs || {}
+    },
+    validation_metadata: normalizeContactValidationMetadata(contact.validation_metadata)
+  };
+}
+
+function createContactRecord(url, section) {
+  const normalizedUrl = normalizeUrl(url);
+  const timestamp = new Date().toISOString();
+  return normalizeContactRecord({
+    contact_id: crypto.randomUUID(),
+    contact_url: normalizedUrl,
+    source_page_title: section?.payload?.source_page_title || section?.payload?.title || section?.pageTitle || '',
+    created_at: timestamp,
+    updated_at: timestamp,
+    status: 'in_progress',
+    captured_sections: [],
+    merged_contact: {
+      contact_identity: {
+        linkedin_profile_url: normalizedUrl
+      },
+      profile_content: {},
+      outreach_inputs: {}
+    },
+    validation_metadata: {}
+  });
+}
+
+function setCurrentContact(session, contact) {
+  session.contact_capture.current_contact_id = contact.contact_id;
+  return contact;
 }
 
 function findContactByUrlInList(contacts, url) {
@@ -267,6 +312,14 @@ function isCompanySection(section) { return section?.type === SECTION_TYPES.COMP
 function getParsedFields(section) { return section?.payload?.parsed_fields || {}; }
 function getSectionType(section) { return String(section?.payload?.section_type || '').toLowerCase(); }
 function stripRoutingFields(fields) { const { is_current_role, ...rest } = fields; return rest; }
+function isCurrentExperience(fields) { return Boolean(fields.is_current_role) || /\bPresent\b/i.test(Object.values(fields || {}).join(' ')); }
+function getContactUrlFromSection(section) {
+  if (section?.type === SECTION_TYPES.CONTACT_URL) return section.payload?.url || section.sourceUrl || '';
+  return section?.payload?.parsed_fields?.linkedin_profile_url
+    || section?.payload?.source_url
+    || section?.sourceUrl
+    || '';
+}
 function activityItem(fields, section) { return fields.recent_activity_summary ? { summary: fields.recent_activity_summary, topics: fields.recent_post_topics || [] } : { ...fields, source_url: section?.payload?.source_url || section?.sourceUrl || '' }; }
 function isEmpty(value) { return value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0); }
 function getPath(object, path) { return path.split('.').reduce((value, key) => value?.[key], object); }
