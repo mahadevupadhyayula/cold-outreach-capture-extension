@@ -50,6 +50,8 @@ export function mergeSession(session, section, companyName = '') {
       const contact = resolveContact(next, section);
       if (contact) {
         contact.updated_at = timestamp;
+        contact.company_name_entered = next.company_name_entered || contact.company_name_entered || '';
+        stripCompanyProfileData(contact);
         contact.captured_sections = [...(contact.captured_sections || []), section];
         mergeContactSection(contact, section);
       }
@@ -149,7 +151,7 @@ function normalizeContactCapture(contactCapture = {}) {
 }
 
 function normalizeContactRecord(contact = {}) {
-  return {
+  const normalized = {
     ...contact,
     captured_sections: Array.isArray(contact.captured_sections) ? contact.captured_sections : [],
     merged_contact: {
@@ -163,6 +165,22 @@ function normalizeContactRecord(contact = {}) {
     },
     validation_metadata: normalizeContactValidationMetadata(contact.validation_metadata)
   };
+  stripCompanyProfileData(normalized);
+  return normalized;
+}
+
+
+function stripCompanyProfileData(contact) {
+  delete contact.company_extraction;
+  delete contact.merged_company;
+  delete contact.company_identity;
+  delete contact.company_context;
+  if (contact.merged_contact) {
+    delete contact.merged_contact.company_extraction;
+    delete contact.merged_contact.merged_company;
+    delete contact.merged_contact.company_identity;
+    delete contact.merged_contact.company_context;
+  }
 }
 
 function createContactRecord(url, section) {
@@ -175,6 +193,7 @@ function createContactRecord(url, section) {
     created_at: timestamp,
     updated_at: timestamp,
     status: 'in_progress',
+    company_name_entered: '',
     captured_sections: [],
     merged_contact: {
       contact_identity: {

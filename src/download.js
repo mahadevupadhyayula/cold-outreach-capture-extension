@@ -75,11 +75,18 @@ function buildContactExports(contacts = [], companyNameEntered = '') {
       contact_url: contact.contact_url || contact.merged_contact?.contact_identity?.linkedin_profile_url || '',
       source_page_title: contact.source_page_title || '',
       status: contact.status || '',
-      merged_contact: contact.merged_contact || {},
+      company_name_entered: contact.company_name_entered || companyNameEntered || '',
+      merged_contact: sanitizeContactMergedData(contact.merged_contact || {}),
       captured_sections: Array.isArray(contact.captured_sections) ? contact.captured_sections : [],
       validation_metadata: validationMetadata
     };
   });
+}
+
+
+function sanitizeContactMergedData(mergedContact = {}) {
+  const { company_extraction, merged_company, company_identity, company_context, ...contactOnlyData } = mergedContact || {};
+  return contactOnlyData;
 }
 
 function buildContactValidationMetadata(contact = {}, companyNameEntered = '') {
