@@ -1,52 +1,173 @@
-import { MODES } from '../src/constants.js';
-import { getSession, getSettings, resetSession, saveSettings } from '../src/store.js';
-import { downloadSessionAsText } from '../src/download.js';
+import { MODES, SECTION_TYPES, STORAGE_KEYS } from '../src/constants.js';
+import { createEmptySession } from '../src/mergeSession.js';
 
-const form = document.querySelector('#settings-form');
-const companyNameInput = document.querySelector('#company-name');
-const sectionCount = document.querySelector('#section-count');
+const settingsForm = document.querySelector('#settingsForm');
+const companyNameInput = document.querySelector('#companyNameInput');
+const extractionMode = document.querySelector('#extractionMode');
+const downloadContactsButton = document.querySelector('#downloadContactsButton');
+const downloadCompanyInfoButton = document.querySelector('#downloadCompanyInfoButton');
+const clearSessionButton = document.querySelector('#clearSessionButton');
 const status = document.querySelector('#status');
-const downloadButton = document.querySelector('#download-session');
-const resetButton = document.querySelector('#reset-session');
+
+const previewCompanyName = document.querySelector('#previewCompanyName');
+const previewMode = document.querySelector('#previewMode');
+const previewContactUrl = document.querySelector('#previewContactUrl');
+const previewCompanyUrl = document.querySelector('#previewCompanyUrl');
+const previewContactSections = document.querySelector('#previewContactSections');
+const previewCompanySections = document.querySelector('#previewCompanySections');
+const previewLastSection = document.querySelector('#previewLastSection');
+
+const CONTACT_SECTION_TYPES = new Set([SECTION_TYPES.CONTACT_INFO, SECTION_TYPES.CONTACT_URL]);
+const COMPANY_SECTION_TYPES = new Set([SECTION_TYPES.COMPANY_INFO, SECTION_TYPES.COMPANY_URL]);
 
 init();
 
 async function init() {
-  const [settings, session] = await Promise.all([getSettings(), getSession()]);
-  companyNameInput.value = settings.companyName || session.companyName || '';
-  const mode = settings.mode || MODES.CONTACT;
-  form.elements.mode.value = mode;
-  sectionCount.textContent = String(session.sections?.length || 0);
+  const { settings, session } = await loadState();
+  companyNameInput.value = getEnteredCompanyName(settings, session);
+  extractionMode.value = getActiveMode(settings);
+  renderPreview(settings, session);
 }
 
-form.addEventListener('submit', async (event) => {
+settingsForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const settings = await saveSettings({
-    companyName: companyNameInput.value,
-    mode: form.elements.mode.value
-  });
-  setStatus(`Saved ${settings.companyName || 'session'} details.`);
-});
 
-downloadButton.addEventListener('click', async () => {
-  const session = await getSession();
-  downloadSessionAsText(session);
-  setStatus('Downloaded local session file.');
-});
+  const companyName = companyNameInput.value.trim();
+  const mode = extractionMode.value || MODES.CONTACT;
+  const { session } = await loadState();
+  const nextSession = session || createEmptySession(companyName);
 
-resetButton.addEventListener('click', async () => {
-  const session = await resetSession(companyNameInput.value);
-  sectionCount.textContent = String(session.sections.length);
-  setStatus('Session reset.');
-});
-
-chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== 'local') return;
-  const session = changes['coldOutreachCapture.session']?.newValue;
-  if (session) {
-    sectionCount.textContent = String(session.sections?.length || 0);
+  if (!nextSession.companyName && companyName) {
+    nextSession.companyName = companyName;
   }
+
+  const settings = {
+    companyName,
+    mode,
+    company_name_entered: companyName,
+    active_mode: mode
+  };
+
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.SETTINGS]: settings,
+    [STORAGE_KEYS.SESSION]: nextSession
+  });
+
+  renderPreview(settings, nextSession);
+  setStatus('Session settings saved.');
 });
+
+downloadContactsButton.addEventListener('click', async () => {
+  const { settings, session } = await loadState();
+  downloadSessionSubset(session, settings, CONTACT_SECTION_TYPES, 'contacts');
+  setStatus('Contacts downloaded.');
+});
+
+downloadCompanyInfoButton.addEventListener('click', async () => {
+  const { settings, session } = await loadState();
+  downloadSessionSubset(session, settings, COMPANY_SECTION_TYPES, 'company-info');
+  setStatus('Company info downloaded.');
+});
+
+clearSessionButton.addEventListener('click', async () => {
+  const confirmed = window.confirm('Clear all local session data for Cold Outreach Capture?');
+  if (!confirmed) return;
+
+  await chrome.storage.local.clear();
+  companyNameInput.value = '';
+  extractionMode.value = MODES.CONTACT;
+  renderPreview(defaultSettings(), createEmptySession());
+  setStatus('Session cleared.');
+});
+
+chrome.storage.onChanged.addListener(async (_changes, areaName) => {
+  if (areaName !== 'local') return;
+  const { settings, session } = await loadState();
+  renderPreview(settings, session);
+});
+
+async function loadState() {
+  const result = await chrome.storage.local.get([STORAGE_KEYS.SETTINGS, STORAGE_KEYS.SESSION]);
+  return {
+    settings: result[STORAGE_KEYS.SETTINGS] || defaultSettings(),
+    session: result[STORAGE_KEYS.SESSION] || null
+  };
+}
+
+function defaultSettings() {
+  return {
+    companyName: '',
+    mode: MODES.CONTACT,
+    company_name_entered: '',
+    active_mode: MODES.CONTACT
+  };
+}
+
+function renderPreview(settings, session) {
+  const currentSession = session || createEmptySession();
+  const sections = currentSession.sections || [];
+  const contactSections = sections.filter((section) => CONTACT_SECTION_TYPES.has(section.type));
+  const companySections = sections.filter((section) => COMPANY_SECTION_TYPES.has(section.type));
+  const contactUrl = [...sections].reverse().find((section) => section.type === SECTION_TYPES.CONTACT_URL);
+  const companyUrl = [...sections].reverse().find((section) => section.type === SECTION_TYPES.COMPANY_URL);
+  const lastSection = sections.at(-1);
+
+  previewCompanyName.textContent = getEnteredCompanyName(settings, currentSession) || '—';
+  previewMode.textContent = formatMode(getActiveMode(settings));
+  previewContactUrl.textContent = readSectionUrl(contactUrl) || '—';
+  previewCompanyUrl.textContent = readSectionUrl(companyUrl) || '—';
+  previewContactSections.textContent = String(contactSections.length);
+  previewCompanySections.textContent = String(companySections.length);
+  previewLastSection.textContent = getSectionTitle(lastSection);
+}
+
+function getEnteredCompanyName(settings, session) {
+  return settings.company_name_entered || settings.companyName || session?.companyName || '';
+}
+
+function getActiveMode(settings) {
+  return settings.active_mode || settings.mode || MODES.CONTACT;
+}
+
+function formatMode(mode) {
+  return mode === MODES.COMPANY ? 'Company' : 'Contact';
+}
+
+function readSectionUrl(section) {
+  return section?.payload?.url || section?.sourceUrl || '';
+}
+
+function getSectionTitle(section) {
+  if (!section) return '—';
+  return section.payload?.title || section.payload?.name || section.type.replaceAll('_', ' ');
+}
+
+function downloadSessionSubset(session, settings, allowedTypes, label) {
+  const currentSession = session || createEmptySession(getEnteredCompanyName(settings, session));
+  const filteredSession = {
+    ...currentSession,
+    companyName: getEnteredCompanyName(settings, currentSession),
+    sections: (currentSession.sections || []).filter((section) => allowedTypes.has(section.type))
+  };
+  downloadJsonText(filteredSession, label);
+}
+
+function downloadJsonText(data, label) {
+  const safeCompanyName = (data.companyName || 'cold-outreach-capture')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'cold-outreach-capture';
+  const date = new Date().toISOString().slice(0, 10);
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = `${safeCompanyName}-${label}-${date}.json.txt`;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
 
 function setStatus(message) {
   status.textContent = message;
