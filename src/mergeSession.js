@@ -3,15 +3,9 @@ import { SECTION_TYPES } from './constants.js';
 const CONTACT_REQUIRED_FIELDS = [
   'contact_identity.full_name',
   'contact_identity.linkedin_profile_url',
-  'contact_identity.linkedin_headline',
   'contact_identity.current_job_title',
   'contact_identity.current_company_name',
-  'contact_identity.location_region',
-  'contact_identity.seniority_level',
-  'profile_content.about_text',
-  'profile_content.current_experience',
-  'profile_content.education',
-  'profile_content.recent_activity'
+  'contact_identity.location_region'
 ];
 
 const COMPANY_REQUIRED_FIELDS = [
@@ -208,9 +202,13 @@ function recalculateValidation(session) {
   for (const contact of session.contact_capture?.contacts || []) {
     contact.validation_metadata = normalizeContactValidationMetadata(contact.validation_metadata);
     contact.validation_metadata.missing_fields = calculateContactMissingFields(contact);
+    contact.validation_metadata.field_conflicts = calculateContactFieldConflicts(contact, session.company_name_entered);
+    contact.validation_metadata.validation_warnings = calculateContactValidationWarnings(contact);
     contact.validation_metadata.needs_manual_validation = contact.validation_metadata.missing_fields.length > 0
       || contact.validation_metadata.field_conflicts.length > 0
       || contact.validation_metadata.validation_warnings.length > 0;
+    if (!contact.validation_metadata.needs_manual_validation) contact.status = 'complete';
+    else if (contact.validation_metadata.missing_fields.includes('contact_url')) contact.status = 'missing_contact_url';
   }
 
   const companyMissingFields = calculateCompanyMissingFields(session);
@@ -222,7 +220,43 @@ function recalculateValidation(session) {
 function calculateContactMissingFields(contact) {
   const missing = [];
   addMissing(missing, '', contact.merged_contact, CONTACT_REQUIRED_FIELDS);
+  if (isEmpty(contact.contact_url)) addUnique(missing, 'contact_url');
   return missing;
+}
+
+function calculateContactFieldConflicts(contact, companyNameEntered = '') {
+  const existingConflicts = Array.isArray(contact.validation_metadata?.field_conflicts)
+    ? contact.validation_metadata.field_conflicts.filter((conflict) => conflict?.type !== 'company_name_mismatch')
+    : [];
+  const currentCompanyName = contact.merged_contact?.contact_identity?.current_company_name || '';
+  if (!isEmpty(currentCompanyName) && !isEmpty(companyNameEntered) && !sameText(currentCompanyName, companyNameEntered)) {
+    existingConflicts.push({
+      type: 'company_name_mismatch',
+      field: 'contact_identity.current_company_name',
+      existing_value: currentCompanyName,
+      expected_value: companyNameEntered,
+      message: `Current company (${currentCompanyName}) differs from entered company (${companyNameEntered}). Review manually; no value was overwritten.`
+    });
+  }
+  return dedupeByStableStringify(existingConflicts);
+}
+
+function calculateContactValidationWarnings(contact) {
+  const preserved = Array.isArray(contact.validation_metadata?.validation_warnings)
+    ? contact.validation_metadata.validation_warnings.filter((warning) => !['missing_contact_url', 'missing_full_name', 'field_conflict'].includes(warning?.type))
+    : [];
+
+  if (contact.validation_metadata?.missing_fields?.includes('contact_url')) {
+    preserved.push({ type: 'missing_contact_url', field: 'contact_url', message: 'Contact is missing a URL and needs manual review.' });
+  }
+  if (contact.validation_metadata?.missing_fields?.includes('contact_identity.full_name')) {
+    preserved.push({ type: 'missing_full_name', field: 'contact_identity.full_name', message: 'Contact is missing a full name. Do not invent a name; review manually.' });
+  }
+  if ((contact.validation_metadata?.field_conflicts || []).length > 0) {
+    preserved.push({ type: 'field_conflict', field: 'validation_metadata.field_conflicts', message: 'Contact has field conflicts that need manual review.' });
+  }
+
+  return dedupeByStableStringify(preserved);
 }
 
 function calculateCompanyMissingFields(session) {
@@ -321,9 +355,20 @@ function getContactUrlFromSection(section) {
     || '';
 }
 function activityItem(fields, section) { return fields.recent_activity_summary ? { summary: fields.recent_activity_summary, topics: fields.recent_post_topics || [] } : { ...fields, source_url: section?.payload?.source_url || section?.sourceUrl || '' }; }
-function isEmpty(value) { return value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0); }
+function isEmpty(value) { return value === undefined || value === null || String(value).trim?.() === '' || (Array.isArray(value) && value.length === 0); }
 function getPath(object, path) { return path.split('.').reduce((value, key) => value?.[key], object); }
 function normalizeUrl(url) { return String(url || '').trim().replace(/\/$/, ''); }
+function addUnique(array, value) { if (!array.includes(value)) array.push(value); }
+function sameText(left, right) { return String(left || '').trim().toLowerCase() === String(right || '').trim().toLowerCase(); }
+function dedupeByStableStringify(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const fingerprint = stableStringify(item);
+    if (seen.has(fingerprint)) return false;
+    seen.add(fingerprint);
+    return true;
+  });
+}
 function stableStringify(value) { return typeof value === 'string' ? value : JSON.stringify(sortValue(value)); }
 function sortValue(value) {
   if (Array.isArray(value)) return value.map(sortValue);
