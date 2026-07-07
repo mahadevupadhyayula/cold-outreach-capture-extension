@@ -54,6 +54,7 @@ export function mergeSession(session, section, companyName = '') {
         stripCompanyProfileData(contact);
         contact.captured_sections = [...(contact.captured_sections || []), section];
         mergeContactSection(contact, section);
+        hydrateContactIdentityFromSection(contact, section, next.company_name_entered || companyName);
       }
     } else if (isCompanySection(section)) {
       next.company_extraction = {
@@ -105,6 +106,65 @@ function mergeContactSection(contactRecord, section) {
   } else if (sectionType === 'education') {
     mergeArray(contact.profile_content, 'education', fields.education || []);
   }
+}
+
+export function hydrateContactIdentityFromSection(contactRecord, section, companyNameEntered = '') {
+  const identity = contactRecord?.merged_contact?.contact_identity;
+  if (!identity) return;
+
+  if (!identity.linkedin_profile_url && contactRecord.contact_url) {
+    mergeScalar(identity, 'linkedin_profile_url', contactRecord.contact_url, contactRecord, section);
+  }
+
+  const sectionType = getSectionType(section);
+  const fields = getParsedFields(section);
+  const rawText = section?.payload?.section_text || section?.payload?.cleaned_text || section?.payload?.raw_selected_text || '';
+
+  if (sectionType === 'notes' || !sectionType || sectionType === 'unknown' || sectionType === 'custom') {
+    hydrateFromNotes(identity, fields, rawText, contactRecord, section);
+  }
+
+  if (sectionType === 'experience') {
+    const normalizedCompany = normalizeCompanyName(fields.company_name);
+    const title = cleanScalar(fields.job_title);
+    const location = cleanScalar(fields.location_region);
+    const isReliableCurrent = isCurrentExperience(fields) || sameText(normalizedCompany, companyNameEntered);
+
+    if (isReliableCurrent) {
+      if (title && !sameText(title, companyNameEntered) && !sameText(title, normalizedCompany)) mergeScalar(identity, 'current_job_title', title, contactRecord, section);
+      if (normalizedCompany && !isLikelyDurationLine(normalizedCompany)) mergeScalar(identity, 'current_company_name', normalizedCompany, contactRecord, section);
+      if (location) mergeScalar(identity, 'location_region', location, contactRecord, section);
+    }
+  }
+
+  const title = identity.current_job_title;
+  const seniority = inferSeniorityLevel(title);
+  if (seniority && seniority !== 'Unknown') {
+    if (isEmpty(identity.seniority_level) || identity.seniority_level === 'Unknown') identity.seniority_level = seniority;
+    else if (identity.seniority_level !== seniority) addConflict(contactRecord, section, 'seniority_level', identity.seniority_level, seniority);
+  }
+}
+
+function hydrateFromNotes(identity, fields, rawText, contactRecord, section) {
+  const text = cleanScalar(fields.note_text) || cleanScalar(rawText);
+  const lines = text.split('\n').map((line) => line.trim()).filter(Boolean);
+  const first = lines[0] || text;
+
+  if (isEmpty(identity.full_name) && lines.length === 1 && isLikelyName(first)) mergeScalar(identity, 'full_name', first, contactRecord, section);
+  if (fields.full_name) mergeScalar(identity, 'full_name', fields.full_name, contactRecord, section);
+  if (fields.linkedin_headline) mergeScalar(identity, 'linkedin_headline', fields.linkedin_headline, contactRecord, section);
+
+  const [title, company] = splitHeadline(first);
+  const reliableTitle = title && company && isLikelyJobTitle(title) && !/^(building|helping|working)\b/i.test(title);
+  if (reliableTitle) {
+    mergeScalar(identity, 'current_job_title', title, contactRecord, section);
+    mergeScalar(identity, 'current_company_name', company, contactRecord, section);
+  } else if (!identity.linkedin_headline && /@| at |\|/i.test(first)) {
+    mergeScalar(identity, 'linkedin_headline', first, contactRecord, section);
+  }
+
+  mergeScalar(identity, 'current_job_title', fields.current_job_title, contactRecord, section);
+  mergeScalar(identity, 'current_company_name', normalizeCompanyName(fields.current_company_name), contactRecord, section);
 }
 
 function mergeCompanySection(session, section) {
@@ -375,6 +435,33 @@ function getContactUrlFromSection(section) {
 }
 function activityItem(fields, section) { return fields.recent_activity_summary ? { summary: fields.recent_activity_summary, topics: fields.recent_post_topics || [] } : { ...fields, source_url: section?.payload?.source_url || section?.sourceUrl || '' }; }
 function isEmpty(value) { return value === undefined || value === null || String(value).trim?.() === '' || (Array.isArray(value) && value.length === 0); }
+function cleanScalar(value) { return typeof value === 'string' ? value.trim() : ''; }
+function isLikelyName(line) { return /^[A-Z][A-Za-z'.-]+(?:\s+[A-Z][A-Za-z'.-]+){1,3}$/.test(String(line || '').trim()) && !/[|@]/.test(line); }
+function splitHeadline(line) {
+  const match = String(line || '').match(/^(.+?)\s*(?:@|(?:\bat\b)|\|)\s*([^|,]+).*$/i);
+  return [match?.[1]?.trim() || '', normalizeCompanyName(match?.[2] || '')];
+}
+function normalizeCompanyName(value) { return String(value || '').replace(/\s*·\s*(Full-time|Part-time|Contract|Self-employed|Freelance).*$/i, '').trim(); }
+function isLikelyDurationLine(line) { return /^(?:Full-time\s*·\s*)?(?:\d+\s*(?:yr|yrs|year|years))?(?:\s*\d+\s*(?:mo|mos|month|months))$/i.test(String(line || '').trim()); }
+function isLikelyJobTitle(line) { return /\b(Product|Manager|Director|VP|RVP|Head|Recruiter|Talent|Solutions|Engineer|PM|GTM|Strategy|Planning|Agent|Founder|Founding|Staff|Principal|Senior)\b/i.test(String(line || '')); }
+export function inferSeniorityLevel(jobTitle = '') {
+  const title = String(jobTitle || '');
+  if (/\bco[-\s]?founder\b/i.test(title)) return 'Co-founder';
+  if (/\bfounding\b/i.test(title)) return 'Founding';
+  if (/\bfounder\b/i.test(title)) return 'Founder';
+  if (/\bCEO\b|Chief Executive Officer/i.test(title)) return 'CEO';
+  if (/\bRVP\b|Regional Vice President/i.test(title)) return 'RVP';
+  if (/\bVP\b|Vice President/i.test(title)) return 'VP';
+  if (/\bDirector\b/i.test(title)) return 'Director';
+  if (/\bHead\b/i.test(title)) return 'Head';
+  if (/\bStaff\b/i.test(title)) return 'Staff';
+  if (/\bPrincipal\b/i.test(title)) return 'Principal';
+  if (/\bSenior\b|\bSr\.?\b/i.test(title)) return 'Senior';
+  if (/\bManager\b/i.test(title)) return 'Manager';
+  if (/\bRecruiter\b/i.test(title)) return 'Recruiter';
+  if (title.trim()) return 'IC';
+  return 'Unknown';
+}
 function getPath(object, path) { return path.split('.').reduce((value, key) => value?.[key], object); }
 function normalizeUrl(url) { return String(url || '').trim().replace(/\/$/, ''); }
 function addUnique(array, value) { if (!array.includes(value)) array.push(value); }
