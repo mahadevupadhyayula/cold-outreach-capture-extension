@@ -1,33 +1,14 @@
-function readSelection() {
-  return String(window.getSelection?.() || '').trim();
+function readSelectedText() {
+  return window.getSelection().toString();
 }
-
-async function storeSelection() {
-  const text = readSelection();
-  if (!text) return;
-
-  await chrome.storage.local.set({
-    'coldOutreachCapture.lastSelection': {
-      text,
-      pageUrl: window.location.href,
-      title: document.title,
-      capturedAt: new Date().toISOString()
-    }
-  });
-}
-
-document.addEventListener('selectionchange', () => {
-  window.clearTimeout(window.__coldOutreachSelectionTimer);
-  window.__coldOutreachSelectionTimer = window.setTimeout(storeSelection, 150);
-});
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== 'GET_SELECTION') return false;
+  if (message?.type !== 'GET_SELECTED_TEXT') return false;
 
   sendResponse({
-    text: readSelection(),
-    pageUrl: window.location.href,
-    title: document.title
+    text: readSelectedText(),
+    title: document.title,
+    pageUrl: window.location.href
   });
   return false;
 });
