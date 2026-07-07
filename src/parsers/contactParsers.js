@@ -37,11 +37,17 @@ const ROLE_KEYWORDS = [
 ];
 
 const SENIORITY_PATTERNS = [
-  ['Founder', /\bfounder|co-founder\b/i],
-  ['C-level', /\bCEO|CTO|CPO|COO|CRO|CMO|Chief\b/i],
+  ['Co-founder', /\bco[-\s]?founder\b/i],
+  ['Founding', /\bfounding\b/i],
+  ['Founder', /\bfound(?:er|ing)\b/i],
+  ['CEO', /\bCEO\b|Chief Executive Officer/i],
   ['VP', /\bVP\b|Vice President/i],
+  ['RVP', /\bRVP\b|Regional Vice President/i],
   ['Head', /\bHead of\b/i],
   ['Director', /\bDirector\b/i],
+  ['Staff', /\bStaff\b/i],
+  ['Principal', /\bPrincipal\b/i],
+  ['Senior', /\bSenior\b|\bSr\.?\b/i],
   ['Manager', /\bManager\b/i]
 ];
 
@@ -118,19 +124,32 @@ function parseExperience({ section_text, cleaned_text }) {
   const lines = meaningfulLines(text);
   const fields = {};
   const snippets = [];
-  const dateLine = lines.find((line) => /\b(?:present|\d{4})\b/i.test(line) && /[-–—]|present/i.test(line));
-  const durationLine = lines.find((line) => /\b(?:yr|yrs|year|years|mo|mos|month|months)\b/i.test(line));
-  const titleLine = lines.find((line) => !/\b(?:present|\d{4}|yr|month|mo)\b/i.test(line));
 
-  if (titleLine) {
-    const [title, company] = splitTitleCompany(titleLine, lines);
-    if (title) addField(fields, snippets, 'job_title', title, titleLine);
-    if (company) addField(fields, snippets, 'company_name', company, titleLine);
+  const dateLine = lines.find(isLikelyDateLine);
+  const durationLine = lines.find(isLikelyDurationLine);
+  const locationLine = lines.find((line) => line !== dateLine && line !== durationLine && isLikelyLocation(line));
+  const first = lines[0] || '';
+  const second = lines[1] || '';
+  const third = lines[2] || '';
+
+  let titleLine = '';
+  let companyLine = '';
+
+  if (first && isLikelyCompanyLine(first) && second && isLikelyDurationLine(second) && third) {
+    companyLine = first;
+    titleLine = third;
+  } else {
+    titleLine = first;
+    companyLine = second && !isLikelyDateLine(second) && !isLikelyDurationLine(second) ? second : '';
   }
-  if (!fields.company_name && lines[1] && lines[1] !== dateLine) addField(fields, snippets, 'company_name', lines[1], lines[1]);
+
+  const company = normalizeCompanyName(companyLine);
+  if (titleLine && !sameText(titleLine, company) && !isLikelyDurationLine(titleLine)) addField(fields, snippets, 'job_title', titleLine, titleLine);
+  if (company && !isLikelyDurationLine(company)) addField(fields, snippets, 'company_name', company, companyLine);
   if (dateLine) addField(fields, snippets, 'employment_dates', dateLine, dateLine);
   if (durationLine) addField(fields, snippets, 'duration', durationLine, durationLine);
-  const desc = lines.filter((line) => line !== titleLine && line !== fields.company_name && line !== dateLine && line !== durationLine).join('\n');
+  if (locationLine) addField(fields, snippets, 'location_region', locationLine, locationLine);
+  const desc = lines.filter((line) => ![titleLine, companyLine, dateLine, durationLine, locationLine].includes(line)).join('\n');
   if (desc) addField(fields, snippets, 'role_description', desc, snippet(desc));
   const domains = matchingKeywords(text, [...ROLE_KEYWORDS, ...AI_PRODUCT_KEYWORDS]);
   if (domains.length) addField(fields, snippets, 'domains_keywords', domains, text);
@@ -180,7 +199,22 @@ function parseContactDetails({ section_text, cleaned_text }) {
 
 function parseNotes({ section_text, cleaned_text }) {
   const text = cleanText(section_text || cleaned_text);
-  return text ? { parsed_fields: { note_text: text }, source_snippets: [snippet(text)] } : emptyParsed();
+  const fields = {};
+  const snippets = [];
+  if (!text) return emptyParsed();
+  addField(fields, snippets, 'note_text', text, text);
+  const lines = meaningfulLines(text);
+  if (lines.length === 1 && isLikelyName(lines[0])) addField(fields, snippets, 'full_name', lines[0], lines[0]);
+  const headline = lines[0] || text;
+  const [title, company] = splitHeadline(headline);
+  if (title && company && isLikelyJobTitle(title) && !/^(building|helping|working)\b/i.test(title)) {
+    addField(fields, snippets, 'current_job_title', title, headline);
+    addField(fields, snippets, 'current_company_name', company, headline);
+    addField(fields, snippets, 'seniority_level', detectSeniority(title), title);
+  } else if (/@| at |\|/i.test(headline)) {
+    addField(fields, snippets, 'linkedin_headline', headline, headline);
+  }
+  return { parsed_fields: fields, source_snippets: snippets };
 }
 
 function normalizeInput(input) {
@@ -225,10 +259,19 @@ function meaningfulLines(text) { return cleanText(text).split('\n').map((line) =
 function firstLine(text) { return meaningfulLines(text)[0] || ''; }
 function normalizeType(type) { return String(type || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'notes'; }
 function isLikelyName(line) { return /^[A-Z][A-Za-z'.-]+(?:\s+[A-Z][A-Za-z'.-]+){1,3}$/.test(line) && !/[|@]/.test(line); }
-function isLikelyLocation(line) { return /\b([A-Z][a-z]+,\s*(?:[A-Z]{2}|[A-Z][a-z]+)|United States|USA|Canada|United Kingdom|Greater|Area|Region|Remote)\b/.test(line); }
-function splitHeadline(line) { const parts = line.split(/\s+(?:at|@)\s+/i); return [parts[0]?.trim() || '', parts[1]?.split(/[|,]/)[0]?.trim() || '']; }
+function isLikelyLocation(line) { return /\b([A-Z][a-z]+,\s*(?:[A-Z]{2}|[A-Z][a-z]+)|United States|USA|Canada|United Kingdom|Ireland|London|San Francisco|New York|Bay Area|Metropolitan Area|Greater|Area|Region|Remote|Hybrid|On-site)\b/.test(line); }
+function splitHeadline(line) {
+  const match = String(line || '').match(/^(.+?)\s*(?:@|(?:\bat\b)|\|)\s*([^|,]+).*$/i);
+  return [match?.[1]?.trim() || '', normalizeCompanyName(match?.[2] || '')];
+}
 function splitTitleCompany(line, lines) { const parts = splitHeadline(line); return [parts[0], parts[1] || '']; }
 function detectSeniority(text) { return SENIORITY_PATTERNS.find(([, pattern]) => pattern.test(text))?.[0] || ''; }
+function isLikelyDateLine(line) { return /\b(?:Present|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d{4})\b/i.test(line) && /[-–—]|Present/i.test(line); }
+function isLikelyDurationLine(line) { return /^(?:Full-time\s*·\s*)?(?:\d+\s*(?:yr|yrs|year|years))?(?:\s*\d+\s*(?:mo|mos|month|months))$/i.test(String(line || '').trim()); }
+function isLikelyCompanyLine(line) { return Boolean(line) && !isLikelyDateLine(line) && !isLikelyDurationLine(line) && !isLikelyLocation(line) && !isLikelyJobTitle(line); }
+function isLikelyJobTitle(line) { return /\b(Product|Manager|Director|VP|RVP|Head|Recruiter|Talent|Solutions|Engineer|PM|GTM|Strategy|Planning|Agent|Founder|Founding|Staff|Principal|Senior)\b/i.test(line); }
+function normalizeCompanyName(value) { return String(value || '').replace(/\s*·\s*(Full-time|Part-time|Contract|Self-employed|Freelance).*$/i, '').trim(); }
+function sameText(left, right) { return String(left || '').trim().toLowerCase() === String(right || '').trim().toLowerCase(); }
 function matchingKeywords(text, keywords) { return keywords.filter((keyword) => new RegExp(`\\b${escapeRegExp(keyword)}\\b`, 'i').test(text)); }
 function extractTopics(text) { return matchingKeywords(text, [...AI_PRODUCT_KEYWORDS, ...ROLE_KEYWORDS]).slice(0, 12); }
 function firstStrongSentence(text) { return (text.match(/[^.!?]{35,220}[.!?]/) || [])[0]?.trim() || ''; }
