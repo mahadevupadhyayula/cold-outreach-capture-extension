@@ -1,5 +1,5 @@
 import { MENU_DEFINITIONS, MENU_ACTIONS, SECTION_TYPES } from '../src/constants.js';
-import { appendSection } from '../src/store.js';
+import { appendSection, extractContactUrlFromPage } from '../src/store.js';
 import { parseSection } from '../src/sectionParser.js';
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -26,7 +26,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const pageUrl = info.pageUrl || tab?.url || selection.pageUrl || '';
   const pageTitle = selection.title || tab?.title || '';
 
-  if (isUrlExtraction(type)) {
+  if (type === SECTION_TYPES.CONTACT_URL) {
+    await extractContactUrlFromPage(pageUrl, pageTitle);
+    return;
+  }
+
+  if (type === SECTION_TYPES.COMPANY_URL) {
     await appendSection(parseSection({
       type,
       url: pageUrl,
@@ -55,10 +60,6 @@ function sectionTypeForMenu(menuItemId) {
     [MENU_ACTIONS.EXTRACT_COMPANY_URL]: SECTION_TYPES.COMPANY_URL
   };
   return map[menuItemId] || '';
-}
-
-function isUrlExtraction(type) {
-  return type === SECTION_TYPES.CONTACT_URL || type === SECTION_TYPES.COMPANY_URL;
 }
 
 async function getCurrentSelection(tab) {

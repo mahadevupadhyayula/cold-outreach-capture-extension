@@ -179,6 +179,35 @@ export async function appendSection(section) {
   return nextSession;
 }
 
+
+export async function extractContactUrlFromPage(url, pageTitle = '') {
+  const normalizedUrl = normalizeUrl(url);
+
+  return updateSession((session) => {
+    if (!normalizedUrl) {
+      addSessionValidationWarning(session, 'Contact URL extraction skipped: the current page URL is empty or invalid.');
+      return session;
+    }
+
+    const existing = findContactByUrl(session, normalizedUrl);
+    if (existing) {
+      session.contact_capture.current_contact_id = existing.contact_id;
+      if (!existing.source_page_title && pageTitle) existing.source_page_title = pageTitle;
+      existing.updated_at = getTimestamp();
+      return session;
+    }
+
+    const contact = createEmptyContact(normalizedUrl, pageTitle);
+    contact.contact_url = normalizedUrl;
+    contact.merged_contact.contact_identity.linkedin_profile_url = normalizedUrl;
+    contact.source_page_title = pageTitle || '';
+    contact.status = 'in_progress';
+    session.contact_capture.contacts.push(contact);
+    session.contact_capture.current_contact_id = contact.contact_id;
+    return session;
+  });
+}
+
 export async function saveLastSelection(selection) {
   await chrome.storage.local.set({ [STORAGE_KEYS.LAST_SELECTION]: selection });
 }
@@ -199,6 +228,8 @@ export function createContactFromUrl(session, url, pageTitle = '') {
   const existing = findContactByUrl(normalized, url);
   if (existing) {
     normalized.contact_capture.current_contact_id = existing.contact_id;
+    if (!existing.source_page_title && pageTitle) existing.source_page_title = pageTitle;
+    existing.updated_at = getTimestamp();
     return existing;
   }
 
@@ -394,7 +425,36 @@ function mergeCapturedSection(session, section, settings) {
 }
 
 function normalizeUrl(url) {
-  return String(url || '').trim().replace(/\/$/, '');
+  const value = String(url || '').trim();
+  if (!value) return '';
+
+  try {
+    const parsed = new URL(value);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return '';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString().replace(/\/$/, '');
+  } catch (_error) {
+    return '';
+  }
+}
+
+function addSessionValidationWarning(session, message) {
+  session.validation_metadata = normalizeSessionValidation(session.validation_metadata);
+  const warning = {
+    type: 'validation_warning',
+    field: 'contact_url',
+    message,
+    captured_at: getTimestamp()
+  };
+
+  const hasWarning = session.validation_metadata.session_conflicts.some((item) => (
+    item?.type === warning.type
+      && item?.field === warning.field
+      && item?.message === warning.message
+  ));
+
+  if (!hasWarning) session.validation_metadata.session_conflicts.push(warning);
 }
 
 function deepMerge(defaultValue, overrideValue) {
