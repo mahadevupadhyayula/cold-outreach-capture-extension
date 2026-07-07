@@ -47,16 +47,18 @@ export function mergeSession(session, section, companyName = '') {
       companyName: companyName.trim() || current.companyName || current.company_name_entered || '',
       updated_at: timestamp,
       updatedAt: timestamp,
-      validation_metadata: normalizeValidationMetadata(current.validation_metadata),
+      validation_metadata: normalizeSessionValidationMetadata(current.validation_metadata),
       sections: [...(current.sections || []), section]
     };
 
     if (isContactSection(section)) {
-      next.contact_extraction = {
-        ...current.contact_extraction,
-        captured_sections: [...(current.contact_extraction?.captured_sections || []), section]
-      };
-      mergeContactSection(next, section);
+      next.contact_capture = normalizeContactCapture(current.contact_capture);
+      const contact = resolveContact(next, section);
+      if (contact) {
+        contact.updated_at = timestamp;
+        contact.captured_sections = [...(contact.captured_sections || []), section];
+        mergeContactSection(contact, section);
+      }
     } else if (isCompanySection(section)) {
       next.company_extraction = {
         ...current.company_extraction,
@@ -65,8 +67,7 @@ export function mergeSession(session, section, companyName = '') {
       mergeCompanySection(next, section);
     }
 
-    next.validation_metadata.missing_fields = calculateMissingFields(next);
-    next.validation_metadata.needs_manual_validation = next.validation_metadata.missing_fields.length > 0 || next.validation_metadata.field_conflicts.length > 0;
+    recalculateValidation(next);
     return next;
   }
 
@@ -78,27 +79,31 @@ export function mergeSession(session, section, companyName = '') {
   };
 }
 
-function mergeContactSection(session, section) {
+function mergeContactSection(contactRecord, section) {
   const sectionType = getSectionType(section);
   const fields = getParsedFields(section);
-  const contact = session.contact_extraction.merged_contact;
+  const contact = contactRecord.merged_contact;
 
   if (section.type === SECTION_TYPES.CONTACT_URL) {
-    mergeScalar(contact.contact_identity, 'linkedin_profile_url', section.payload?.url || section.sourceUrl || '', session, section);
+    const url = section.payload?.url || section.sourceUrl || '';
+    contactRecord.contact_url = url || contactRecord.contact_url || '';
+    contactRecord.source_page_title = section.payload?.title || contactRecord.source_page_title || '';
+    mergeScalar(contact.contact_identity, 'linkedin_profile_url', url, contactRecord, section);
     return;
   }
 
   if (sectionType === 'header') {
-    mergeFields(contact.contact_identity, fields, ['full_name', 'linkedin_profile_url', 'linkedin_headline', 'current_job_title', 'current_company_name', 'location_region', 'seniority_level'], session, section);
+    mergeFields(contact.contact_identity, fields, ['full_name', 'linkedin_profile_url', 'linkedin_headline', 'current_job_title', 'current_company_name', 'location_region', 'seniority_level'], contactRecord, section);
+    if (!contactRecord.contact_url && contact.contact_identity.linkedin_profile_url) contactRecord.contact_url = contact.contact_identity.linkedin_profile_url;
   } else if (sectionType === 'about') {
-    mergeScalar(contact.profile_content, 'about_text', fields.about_text, session, section);
-    mergeArrayFields(contact.outreach_inputs, fields, ['personalization_hook_candidates', 'ai_product_keywords', 'role_keywords', 'possible_dm_angles'], session, section);
+    mergeScalar(contact.profile_content, 'about_text', fields.about_text, contactRecord, section);
+    mergeArrayFields(contact.outreach_inputs, fields, ['personalization_hook_candidates', 'ai_product_keywords', 'role_keywords', 'possible_dm_angles'], contactRecord, section);
   } else if (sectionType === 'experience') {
     const targetKey = fields.is_current_role ? 'current_experience' : 'previous_experience';
     mergeArray(contact.profile_content, targetKey, [stripRoutingFields(fields)]);
   } else if (sectionType === 'activity') {
     mergeArray(contact.profile_content, 'recent_activity', [activityItem(fields, section)]);
-    mergeArrayFields(contact.outreach_inputs, fields, ['personalization_hook_candidates'], session, section);
+    mergeArrayFields(contact.outreach_inputs, fields, ['personalization_hook_candidates'], contactRecord, section);
   } else if (sectionType === 'featured') {
     mergeArray(contact.profile_content, 'featured_items', fields.featured_items || []);
   } else if (sectionType === 'education') {
@@ -125,22 +130,76 @@ function mergeCompanySection(session, section) {
   mergeArrayFields(company.company_context, fields, ['open_role_signals', 'remote_hiring_signals', 'recent_post_topics', 'ai_product_relevance_notes'], session, section);
 }
 
-function mergeFields(target, fields, keys, session, section) {
-  for (const key of keys) mergeScalar(target, key, fields[key], session, section);
+function resolveContact(session, section) {
+  const contacts = session.contact_capture.contacts;
+  if (section.type === SECTION_TYPES.CONTACT_URL) {
+    const url = section.payload?.url || section.sourceUrl || '';
+    const existing = findContactByUrlInList(contacts, url);
+    if (existing) {
+      session.contact_capture.current_contact_id = existing.contact_id;
+      return existing;
+    }
+  }
+
+  const current = contacts.find((contact) => contact.contact_id === session.contact_capture.current_contact_id);
+  if (current) return current;
+  return contacts[0] || null;
 }
 
-function mergeArrayFields(target, fields, keys, session, section) {
-  for (const key of keys) mergeArray(target, key, fields[key] || [], session, section);
+function normalizeContactCapture(contactCapture = {}) {
+  return {
+    current_contact_id: contactCapture.current_contact_id || '',
+    contacts: Array.isArray(contactCapture.contacts) ? contactCapture.contacts : []
+  };
 }
 
-function mergeScalar(target, key, value, session, section) {
+function findContactByUrlInList(contacts, url) {
+  const normalizedUrl = normalizeUrl(url);
+  if (!normalizedUrl) return null;
+  return contacts.find((contact) => normalizeUrl(contact.contact_url || contact.merged_contact?.contact_identity?.linkedin_profile_url) === normalizedUrl) || null;
+}
+
+function recalculateValidation(session) {
+  for (const contact of session.contact_capture?.contacts || []) {
+    contact.validation_metadata = normalizeContactValidationMetadata(contact.validation_metadata);
+    contact.validation_metadata.missing_fields = calculateContactMissingFields(contact);
+    contact.validation_metadata.needs_manual_validation = contact.validation_metadata.missing_fields.length > 0 || contact.validation_metadata.field_conflicts.length > 0;
+  }
+
+  const companyMissingFields = calculateCompanyMissingFields(session);
+  session.validation_metadata.needs_manual_validation = companyMissingFields.length > 0
+    || (session.contact_capture?.contacts || []).some((contact) => contact.validation_metadata.needs_manual_validation)
+    || session.validation_metadata.session_conflicts.length > 0;
+}
+
+function calculateContactMissingFields(contact) {
+  const missing = [];
+  addMissing(missing, '', contact.merged_contact, CONTACT_REQUIRED_FIELDS);
+  return missing;
+}
+
+function calculateCompanyMissingFields(session) {
+  const missing = [];
+  addMissing(missing, 'merged_company', session.company_extraction?.merged_company, COMPANY_REQUIRED_FIELDS);
+  return missing;
+}
+
+function mergeFields(target, fields, keys, owner, section) {
+  for (const key of keys) mergeScalar(target, key, fields[key], owner, section);
+}
+
+function mergeArrayFields(target, fields, keys, owner, section) {
+  for (const key of keys) mergeArray(target, key, fields[key] || [], owner, section);
+}
+
+function mergeScalar(target, key, value, owner, section) {
   if (isEmpty(value)) return;
   if (Array.isArray(value)) return mergeArray(target, key, value);
   const existing = target[key];
   if (isEmpty(existing)) {
     target[key] = value;
   } else if (existing !== value) {
-    addConflict(session, section, key, existing, value);
+    addConflict(owner, section, key, existing, value);
   }
 }
 
@@ -159,7 +218,7 @@ function mergeArray(target, key, values) {
   }
 }
 
-function addConflict(session, section, field, existing_value, new_value) {
+function addConflict(owner, section, field, existing_value, new_value) {
   const conflict = {
     field,
     existing_value,
@@ -167,24 +226,31 @@ function addConflict(session, section, field, existing_value, new_value) {
     section_id: section?.id || '',
     captured_at: section?.capturedAt || section?.payload?.captured_at || section?.payload?.capturedAt || ''
   };
-  const conflicts = session.validation_metadata.field_conflicts;
-  if (!conflicts.some((item) => stableStringify(item) === stableStringify(conflict))) conflicts.push(conflict);
-}
 
-function calculateMissingFields(session) {
-  const missing = [];
-  addMissing(missing, 'merged_contact', session.contact_extraction?.merged_contact, CONTACT_REQUIRED_FIELDS);
-  addMissing(missing, 'merged_company', session.company_extraction?.merged_company, COMPANY_REQUIRED_FIELDS);
-  return missing;
+  if (owner?.contact_id) {
+    const conflicts = owner.validation_metadata.field_conflicts;
+    if (!conflicts.some((item) => stableStringify(item) === stableStringify(conflict))) conflicts.push(conflict);
+    return;
+  }
+
+  const conflicts = owner.validation_metadata.session_conflicts;
+  if (!conflicts.some((item) => stableStringify(item) === stableStringify(conflict))) conflicts.push(conflict);
 }
 
 function addMissing(missing, root, object, paths) {
   for (const path of paths) {
-    if (isEmpty(getPath(object, path))) missing.push(`${root}.${path}`);
+    if (isEmpty(getPath(object, path))) missing.push(root ? `${root}.${path}` : path);
   }
 }
 
-function normalizeValidationMetadata(metadata = {}) {
+function normalizeSessionValidationMetadata(metadata = {}) {
+  return {
+    needs_manual_validation: metadata.needs_manual_validation !== false,
+    session_conflicts: Array.isArray(metadata.session_conflicts) ? metadata.session_conflicts : []
+  };
+}
+
+function normalizeContactValidationMetadata(metadata = {}) {
   return {
     missing_fields: Array.isArray(metadata.missing_fields) ? metadata.missing_fields : [],
     field_conflicts: Array.isArray(metadata.field_conflicts) ? metadata.field_conflicts : [],
@@ -192,7 +258,7 @@ function normalizeValidationMetadata(metadata = {}) {
   };
 }
 
-function isStructuredSession(session) { return Boolean(session?.contact_extraction && session?.company_extraction); }
+function isStructuredSession(session) { return Boolean(session?.contact_capture && session?.company_extraction); }
 function isContactSection(section) { return section?.type === SECTION_TYPES.CONTACT_INFO || section?.type === SECTION_TYPES.CONTACT_URL; }
 function isCompanySection(section) { return section?.type === SECTION_TYPES.COMPANY_INFO || section?.type === SECTION_TYPES.COMPANY_URL; }
 function getParsedFields(section) { return section?.payload?.parsed_fields || {}; }
@@ -201,6 +267,7 @@ function stripRoutingFields(fields) { const { is_current_role, ...rest } = field
 function activityItem(fields, section) { return fields.recent_activity_summary ? { summary: fields.recent_activity_summary, topics: fields.recent_post_topics || [] } : { ...fields, source_url: section?.payload?.source_url || section?.sourceUrl || '' }; }
 function isEmpty(value) { return value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0); }
 function getPath(object, path) { return path.split('.').reduce((value, key) => value?.[key], object); }
+function normalizeUrl(url) { return String(url || '').trim().replace(/\/$/, ''); }
 function stableStringify(value) { return typeof value === 'string' ? value : JSON.stringify(sortValue(value)); }
 function sortValue(value) {
   if (Array.isArray(value)) return value.map(sortValue);

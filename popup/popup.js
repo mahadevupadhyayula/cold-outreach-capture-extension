@@ -130,7 +130,7 @@ function renderPreview(settings, session) {
 function buildSessionSummary(settings, session) {
   const flatSections = Array.isArray(session.sections) ? session.sections : [];
   const capturedSections = [
-    ...(session.contact_extraction?.captured_sections || []),
+    ...((session.contact_capture?.contacts || []).flatMap((contact) => contact.captured_sections || [])),
     ...(session.company_extraction?.captured_sections || [])
   ];
   const sections = flatSections.length > 0 ? flatSections : capturedSections;
@@ -141,15 +141,34 @@ function buildSessionSummary(settings, session) {
   return {
     companyName: getEnteredCompanyName(settings, session),
     activeMode: getActiveMode(settings, session),
-    contactUrl: session.contact_extraction?.contact_url || readSectionUrl(findLastSection(sections, SECTION_TYPES.CONTACT_URL)),
+    contactUrl: getCurrentContactUrl(session) || readSectionUrl(findLastSection(sections, SECTION_TYPES.CONTACT_URL)),
     companyUrl: session.company_extraction?.company_url || readSectionUrl(findLastSection(sections, SECTION_TYPES.COMPANY_URL)),
     contactSections,
     companySections,
-    missingContactFields: filterMissingFields(missingFields, 'merged_contact.'),
+    missingContactFields: getContactMissingFields(session),
     missingCompanyFields: filterMissingFields(missingFields, 'merged_company.'),
-    fieldConflictsCount: session.validation_metadata?.field_conflicts?.length || 0,
+    fieldConflictsCount: getConflictCount(session),
     sections
   };
+}
+
+
+function getCurrentContactUrl(session) {
+  const contacts = session.contact_capture?.contacts || [];
+  const current = contacts.find((contact) => contact.contact_id === session.contact_capture?.current_contact_id) || contacts.at(-1);
+  return current?.contact_url || current?.merged_contact?.contact_identity?.linkedin_profile_url || '';
+}
+
+function getContactMissingFields(session) {
+  return (session.contact_capture?.contacts || []).flatMap((contact, index) => {
+    const label = contact.merged_contact?.contact_identity?.full_name || contact.contact_url || `Contact ${index + 1}`;
+    return (contact.validation_metadata?.missing_fields || []).map((field) => `${label}: ${field}`);
+  });
+}
+
+function getConflictCount(session) {
+  const contactConflicts = (session.contact_capture?.contacts || []).reduce((count, contact) => count + (contact.validation_metadata?.field_conflicts?.length || 0), 0);
+  return contactConflicts + (session.validation_metadata?.session_conflicts?.length || 0);
 }
 
 function buildWarnings(summary, extractionType = null) {
