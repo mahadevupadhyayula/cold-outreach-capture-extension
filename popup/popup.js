@@ -1,4 +1,5 @@
 import { MODES, SECTION_TYPES, STORAGE_KEYS } from '../src/constants.js';
+import { downloadExtractionAsJsonText } from '../src/download.js';
 import { createEmptySession } from '../src/mergeSession.js';
 
 const settingsForm = document.querySelector('#settingsForm');
@@ -59,13 +60,13 @@ settingsForm.addEventListener('submit', async (event) => {
 
 downloadContactsButton.addEventListener('click', async () => {
   const { settings, session } = await loadState();
-  downloadSessionSubset(session, settings, CONTACT_SECTION_TYPES, 'contacts');
+  await downloadExtraction(session, settings, 'contacts');
   setStatus('Contacts downloaded.');
 });
 
 downloadCompanyInfoButton.addEventListener('click', async () => {
   const { settings, session } = await loadState();
-  downloadSessionSubset(session, settings, COMPANY_SECTION_TYPES, 'company-info');
+  await downloadExtraction(session, settings, 'company');
   setStatus('Company info downloaded.');
 });
 
@@ -122,7 +123,7 @@ function renderPreview(settings, session) {
 }
 
 function getEnteredCompanyName(settings, session) {
-  return settings.company_name_entered || settings.companyName || session?.companyName || '';
+  return settings.company_name_entered || settings.companyName || session?.company_name_entered || session?.companyName || '';
 }
 
 function getActiveMode(settings) {
@@ -142,31 +143,10 @@ function getSectionTitle(section) {
   return section.payload?.title || section.payload?.name || section.type.replaceAll('_', ' ');
 }
 
-function downloadSessionSubset(session, settings, allowedTypes, label) {
-  const currentSession = session || createEmptySession(getEnteredCompanyName(settings, session));
-  const filteredSession = {
-    ...currentSession,
-    companyName: getEnteredCompanyName(settings, currentSession),
-    sections: (currentSession.sections || []).filter((section) => allowedTypes.has(section.type))
-  };
-  downloadJsonText(filteredSession, label);
-}
-
-function downloadJsonText(data, label) {
-  const safeCompanyName = (data.companyName || 'cold-outreach-capture')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '') || 'cold-outreach-capture';
-  const date = new Date().toISOString().slice(0, 10);
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'text/plain;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = `${safeCompanyName}-${label}-${date}.json.txt`;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
+async function downloadExtraction(session, settings, extractionType) {
+  const companyName = getEnteredCompanyName(settings, session);
+  const currentSession = session || createEmptySession(companyName);
+  await downloadExtractionAsJsonText(currentSession, extractionType, companyName);
 }
 
 function setStatus(message) {
