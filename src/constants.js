@@ -4,6 +4,8 @@ export const STORAGE_KEYS = Object.freeze({
   LAST_SELECTION: 'coldOutreachCapture.lastSelection'
 });
 
+export const SESSION_SCHEMA_VERSION = '0.1.0';
+
 export const MODES = Object.freeze({
   CONTACT: 'contact',
   COMPANY: 'company'
