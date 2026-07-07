@@ -19,7 +19,7 @@
           <label for="companyNameInput">Company Name</label>
           <input id="companyNameInput" name="companyName" type="text" placeholder="Example: Acme Inc." autocomplete="organization">
 
-          <label for="extractionMode">Extraction Mode</label>
+          <label for="extractionMode">Active Mode</label>
           <select id="extractionMode" name="extractionMode">
             <option value="contact">Contact</option>
             <option value="company">Company</option>
@@ -29,8 +29,41 @@
         </form>
       </section>
 
-      <section class="card" aria-labelledby="summaryTitle" aria-live="polite">
-        <h2 id="summaryTitle">Current session summary</h2>
+      <section class="card" aria-labelledby="currentContactTitle" aria-live="polite">
+        <div class="section-heading-row">
+          <h2 id="currentContactTitle">Current contact summary</h2>
+          <span id="activeContactBadge" class="badge">No active contact</span>
+        </div>
+        <dl class="session-preview">
+          <div>
+            <dt>Name</dt>
+            <dd id="previewCurrentContactName">—</dd>
+          </div>
+          <div>
+            <dt>URL</dt>
+            <dd id="previewCurrentContactUrl">—</dd>
+          </div>
+          <div>
+            <dt>Status</dt>
+            <dd id="previewCurrentContactStatus">—</dd>
+          </div>
+          <div>
+            <dt>Captured sections</dt>
+            <dd id="previewCurrentContactSections">0</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="card" aria-labelledby="contactsTitle">
+        <div class="section-heading-row">
+          <h2 id="contactsTitle">Contacts captured</h2>
+          <strong id="previewTotalContacts" class="count-pill">0</strong>
+        </div>
+        <ol id="previewContactList" class="contact-list"></ol>
+      </section>
+
+      <section id="companySummaryCard" class="card" aria-labelledby="companySummaryTitle" aria-live="polite">
+        <h2 id="companySummaryTitle">Company extraction summary</h2>
         <dl class="session-preview">
           <div>
             <dt>Company name</dt>
@@ -41,24 +74,12 @@
             <dd id="previewMode">Contact</dd>
           </div>
           <div>
-            <dt>Contact URL</dt>
-            <dd id="previewContactUrl">—</dd>
-          </div>
-          <div>
             <dt>Company URL</dt>
             <dd id="previewCompanyUrl">—</dd>
           </div>
           <div>
-            <dt>Captured contact sections</dt>
-            <dd id="previewContactSections">0</dd>
-          </div>
-          <div>
             <dt>Captured company sections</dt>
             <dd id="previewCompanySections">0</dd>
-          </div>
-          <div>
-            <dt>Missing contact fields</dt>
-            <dd id="previewMissingContactFields">None</dd>
           </div>
           <div>
             <dt>Missing company fields</dt>
@@ -78,6 +99,8 @@
       </section>
 
       <section class="actions" aria-label="Session actions">
+        <button id="startNewContactButton" type="button">Start New Contact</button>
+        <button id="removeCurrentContactButton" type="button" class="secondary danger-text">Remove Current Contact</button>
         <button id="downloadContactsButton" type="button">Download Contacts</button>
         <button id="downloadCompanyInfoButton" type="button">Download Company Info</button>
         <button id="clearSessionButton" type="button" class="secondary">Clear Session</button>
